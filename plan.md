@@ -150,7 +150,7 @@ The emulation thread is the **sole owner** of core state — no interior mutabil
 
 #### Why?
 
-- **Frame math**: 768 × 312 × 3 bytes (RGB24) = **719,424 bytes/frame** × 50 fps = **~34.3 MB/s**.
+- **Frame math**: 768 × 312 × 3 bytes (RGB24) = **719,424 bytes/frame** × 50.05 fps ≈ **~36 MB/s**.
   TCP loopback can handle this, but shared memory eliminates the kernel copy entirely — critical for sustaining 50 Hz without jitter. The frame is written once into the ring buffer; the consumer reads it directly.
 
 - **Cross-platform**: `shared_memory` crate wraps `mmap`/`CreateFileMapping`. Signaling via `interprocess` crate (named pipe on Windows, UDS on Unix).
@@ -344,7 +344,7 @@ Run the same ROM with identical initial state twice; assert byte-identical frame
 TEST_OUT port=0xED value=0x01
 TEST_OUT port=0xED value=0x00
 ...
-HALT at PC=0x1234 after 12345 cycles
+HALT at PC=0x1234 after 12345 cpu_cycles
 ```
 
 ### 5.6 IPC Tests
@@ -378,7 +378,7 @@ HALT at PC=0x1234 after 12345 cycles
 ### 6.4 Display Rasterizer
 
 - Pre-bake the full 256-entry `vector_color → RGB` palette at init time (as in C++).
-- Use `unsafe` for unchecked frame buffer indexing in the hot rasterize path (after validating bounds at frame start). Bounds checks in the inner pixel loop cost ~5% on benchmarks.
+- Use `unsafe` for unchecked frame buffer indexing in the hot rasterize path (after validating bounds at frame start). Bounds checks in the inner pixel loop are estimated to cost ~5% based on similar emulator projects; benchmark after porting to confirm.
 - Batch 16 pixels (4 CPU cycles) per rasterize call to amortize function-call overhead.
 
 ### 6.5 Audio Buffering
@@ -499,7 +499,7 @@ When running with `--halt-exit` or any ROM that performs `OUT 0xED`:
 ```
 TEST_OUT port=0xED value=0x42
 TEST_OUT port=0xED value=0x00
-HALT at PC=0x0105 after 847231 cycles
+HALT at PC=0x0105 after 847231 cpu_cycles
 ```
 
 This is consumed by test runners (e.g., `v6asm` integration tests) for deterministic assertion.
