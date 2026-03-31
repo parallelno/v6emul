@@ -17,5 +17,6 @@ namespace dev::ipc
 	// Special pseudo-commands (negative values, not in the Req enum)
 	inline constexpr int CMD_PING = -1;
 	inline constexpr int CMD_PONG = -2;
+	inline constexpr int CMD_GET_FRAME = -3; // fetch raw ABGR frame buffer
 
 } // namespace dev::ipc

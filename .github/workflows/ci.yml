@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            preset: ci
+            build-config: Release
+          - os: ubuntu-latest
+            preset: ci
+            build-config: Release
+          - os: macos-latest
+            preset: ci
+            build-config: Release
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build build/ci --config ${{ matrix.build-config }}
+
+      - name: Test
+        run: ctest --test-dir build/ci --build-config ${{ matrix.build-config }} --output-on-failure --timeout 120

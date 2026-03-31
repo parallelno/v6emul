@@ -160,6 +160,25 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
 			continue;
 		}
 
+		if (cmdInt == dev::ipc::CMD_GET_FRAME) {
+			auto* fb = _hw.GetFrame(false);
+			nlohmann::json responseJ;
+			if (fb) {
+				auto* raw = reinterpret_cast<const uint8_t*>(fb->data());
+				size_t len = fb->size() * sizeof(dev::ColorI);
+				responseJ = dev::ipc::MakeResponse({
+					{"width", dev::Display::FRAME_W},
+					{"height", dev::Display::FRAME_H},
+					{"pixels", nlohmann::json::binary_t({raw, raw + len})}
+				});
+			} else {
+				responseJ = dev::ipc::MakeErrorResponse("no frame available");
+			}
+			auto respBytes = dev::ipc::Encode(responseJ);
+			server.Send(respBytes);
+			continue;
+		}
+
 		// Dispatch to Hardware::Request()
 		auto req = static_cast<dev::Hardware::Req>(cmdInt);
 

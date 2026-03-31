@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "core/hardware.h"
+#include "core/display.h"
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
 #include "ipc/commands.h"
@@ -169,6 +170,24 @@ struct ServerContext {
 					if (cmdInt == dev::ipc::CMD_PING) {
 						auto resp = dev::ipc::Encode(dev::ipc::MakeResponse({{"pong", true}}));
 						server.Send(resp);
+						continue;
+					}
+
+					if (cmdInt == dev::ipc::CMD_GET_FRAME) {
+						auto* fb = hw->GetFrame(false);
+						nlohmann::json responseJ;
+						if (fb) {
+							auto* raw = reinterpret_cast<const uint8_t*>(fb->data());
+							size_t len = fb->size() * sizeof(dev::ColorI);
+							responseJ = dev::ipc::MakeResponse({
+								{"width", dev::Display::FRAME_W},
+								{"height", dev::Display::FRAME_H},
+								{"pixels", nlohmann::json::binary_t({raw, raw + len})}
+							});
+						} else {
+							responseJ = dev::ipc::MakeErrorResponse("no frame available");
+						}
+						if (!server.Send(dev::ipc::Encode(responseJ))) break;
 						continue;
 					}
 
