@@ -87,6 +87,7 @@ set_target_properties(luajit PROPERTIES
 
 add_subdirectory(libs/v6utils)
 add_subdirectory(libs/v6core)
+add_subdirectory(libs/v6ipc)
 add_subdirectory(app)
 
 # ── Testing ────────────────────────────────────────────────────────────

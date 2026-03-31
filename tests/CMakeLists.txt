@@ -14,6 +14,10 @@ add_executable(determinism_tests determinism_tests.cpp)
 target_link_libraries(determinism_tests PRIVATE v6core v6utils)
 add_test(NAME determinism_tests COMMAND determinism_tests)
 
+add_executable(ipc_tests ipc_tests.cpp)
+target_link_libraries(ipc_tests PRIVATE v6core v6ipc v6utils)
+add_test(NAME ipc_tests COMMAND ipc_tests)
+
 # Golden tests: run v6emul with test ROM and compare stdout to expected output
 set(GOLDEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/golden")
 

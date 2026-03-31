@@ -1,5 +1,4 @@
 #include <iostream>
-#include <iostream>
 #include <string>
 #include <format>
 #include <vector>
@@ -9,76 +8,52 @@
 #include "core/hardware.h"
 #include "utils/utils.h"
 #include "utils/args_parser.h"
+#include "ipc/transport.h"
+#include "ipc/protocol.h"
+#include "ipc/commands.h"
 
 static constexpr uint8_t TEST_PORT = 0xED;
 
-int main(int argc, char* argv[])
+// ── Test mode: load ROM, run headless, print results ─────────────────
+static int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
+	int _loadAddr, bool _haltExit, int _runFrames, int _runCycles,
+	bool _dumpCpu, bool _dumpMemory)
 {
-	dev::ArgsParser args(argc, argv, "v6emul - Vector-06C Emulator");
-
-	auto romPath = args.GetString("rom", "Path to a ROM file to load", false, "");
-	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
-	auto runFrames = args.GetInt("run-frames", "Run for N frames then exit", false, 0);
-	auto runCycles = args.GetInt("run-cycles", "Run for N CPU cycles then exit", false, 0);
-	bool haltExit = args.HasFlag("halt-exit");
-	bool dumpCpu = args.HasFlag("dump-cpu");
-	bool dumpMemory = args.HasFlag("dump-memory");
-	auto tcpPort = args.GetInt("tcp-port", "TCP port for IPC server (default: 9876)", false, 9876);
-	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
-
-	if (!args.IsRequirementSatisfied()) return 1;
-
-	// If no ROM and no stop condition, just print banner and exit
-	if (romPath.empty() && !haltExit && runFrames == 0 && runCycles == 0) {
-		std::cout << "v6emul - Vector-06C Emulator" << std::endl;
-		std::cout << "Use -rom <file> with -halt-exit, -run-frames, or -run-cycles to run a ROM." << std::endl;
-		return 0;
-	}
-
-	// Need a stop condition
-	if (!haltExit && runFrames == 0 && runCycles == 0) {
-		std::cerr << "Error: specify at least one stop condition: -halt-exit, -run-frames N, or -run-cycles N" << std::endl;
-		return 1;
-	}
-
 	// Load ROM file
 	std::vector<uint8_t> romData;
-	if (!romPath.empty()) {
-		auto res = dev::LoadFile(romPath);
+	if (!_romPath.empty()) {
+		auto res = dev::LoadFile(_romPath);
 		if (!res) {
-			std::cerr << std::format("Error: failed to load ROM file: {}", romPath) << std::endl;
+			std::cerr << std::format("Error: failed to load ROM file: {}", _romPath) << std::endl;
 			return 1;
 		}
 		romData = std::move(*res);
 	}
 
-	// Create hardware (heap-allocated due to ~2MB Memory inside)
-	auto hw = std::make_unique<dev::Hardware>("", "", true);
-
 	// Set up test port output callback
-	hw->SetDebugPortOutCallback([](uint8_t port, uint8_t value) {
+	_hw.SetDebugPortOutCallback([](uint8_t port, uint8_t value) {
 		std::cout << std::format("TEST_OUT port=0x{:02X} value=0x{:02X}", port, value) << std::endl;
 	});
 
 	// Load ROM data into RAM
 	if (!romData.empty()) {
 		nlohmann::json setMemJ = {
-			{"addr", loadAddr},
+			{"addr", _loadAddr},
 			{"data", romData}
 		};
-		hw->Request(dev::Hardware::Req::SET_MEM, setMemJ);
+		_hw.Request(dev::Hardware::Req::SET_MEM, setMemJ);
 	}
 
 	// Restart: disable ROM mapping, reset CPU to PC=0
-	hw->Request(dev::Hardware::Req::RESTART);
+	_hw.Request(dev::Hardware::Req::RESTART);
 
 	// Run headless with stop conditions
 	nlohmann::json headlessJ = {
-		{"haltExit", haltExit},
-		{"maxFrames", static_cast<uint64_t>(runFrames)},
-		{"maxCycles", static_cast<uint64_t>(runCycles)}
+		{"haltExit", _haltExit},
+		{"maxFrames", static_cast<uint64_t>(_runFrames)},
+		{"maxCycles", static_cast<uint64_t>(_runCycles)}
 	};
-	auto result = hw->Request(dev::Hardware::Req::RUN_HEADLESS, headlessJ);
+	auto result = _hw.Request(dev::Hardware::Req::RUN_HEADLESS, headlessJ);
 
 	if (!result) {
 		std::cerr << "Error: headless run failed" << std::endl;
@@ -91,15 +66,13 @@ int main(int argc, char* argv[])
 	auto frames = resJ["frames"].get<uint64_t>();
 	auto halted = resJ["halted"].get<bool>();
 
-	// Print halt/exit line
 	if (halted) {
 		std::cout << std::format("HALT at PC=0x{:04X} after {} cpu_cycles {} frames", pc, cc, frames) << std::endl;
 	} else {
 		std::cout << std::format("EXIT at PC=0x{:04X} after {} cpu_cycles {} frames", pc, cc, frames) << std::endl;
 	}
 
-	// Dump CPU state if requested
-	if (dumpCpu) {
+	if (_dumpCpu) {
 		auto af = resJ["af"].get<uint16_t>();
 		auto bc = resJ["bc"].get<uint16_t>();
 		auto de = resJ["de"].get<uint16_t>();
@@ -111,9 +84,8 @@ int main(int argc, char* argv[])
 		std::cout << std::format("     PC={:04X} SP={:04X} CC={}", pc, sp, cc) << std::endl;
 	}
 
-	// Dump memory if requested
-	if (dumpMemory) {
-		auto ram = hw->GetRam();
+	if (_dumpMemory) {
+		auto ram = _hw.GetRam();
 		if (ram) {
 			std::cout << "MEMORY:" << std::endl;
 			for (int addr = 0; addr < 0x10000; addr += 16) {
@@ -127,4 +99,137 @@ int main(int argc, char* argv[])
 	}
 
 	return 0;
+}
+
+// ── IPC server mode: TCP recv loop → Hardware::Request() → response ──
+static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
+{
+	dev::ipc::Transport server;
+
+	if (!server.Listen(_port)) {
+		std::cerr << std::format("Error: failed to listen on port {}", _port) << std::endl;
+		return 1;
+	}
+
+	std::cout << std::format("IPC server listening on 127.0.0.1:{}", server.GetPort()) << std::endl;
+
+	// Start emulation in RUN state
+	_hw.Request(dev::Hardware::Req::RUN);
+
+	while (true) {
+		if (!server.IsClientConnected()) {
+			std::cout << "Waiting for client..." << std::endl;
+			if (!server.AcceptClient()) {
+				std::cerr << "Error: failed to accept client" << std::endl;
+				continue;
+			}
+			std::cout << "Client connected" << std::endl;
+		}
+
+		// Receive one message
+		auto payload = server.Recv();
+		if (payload.empty()) {
+			std::cout << "Client disconnected" << std::endl;
+			server.Close();
+			// Re-listen for next client
+			if (!server.Listen(_port)) {
+				std::cerr << "Error: failed to re-listen" << std::endl;
+				return 1;
+			}
+			continue;
+		}
+
+		// Decode request
+		nlohmann::json requestJ;
+		try {
+			requestJ = dev::ipc::Decode(payload);
+		} catch (const std::exception& e) {
+			auto errResp = dev::ipc::Encode(
+				dev::ipc::MakeErrorResponse(std::format("decode error: {}", e.what())));
+			server.Send(errResp);
+			continue;
+		}
+
+		int cmdInt = requestJ.value(dev::ipc::FIELD_CMD, 0);
+		auto dataJ = requestJ.value(dev::ipc::FIELD_DATA, nlohmann::json{});
+
+		// Handle pseudo-commands
+		if (cmdInt == dev::ipc::CMD_PING) {
+			auto resp = dev::ipc::Encode(dev::ipc::MakeResponse({{"pong", true}}));
+			server.Send(resp);
+			continue;
+		}
+
+		// Dispatch to Hardware::Request()
+		auto req = static_cast<dev::Hardware::Req>(cmdInt);
+
+		// EXIT command: respond, then shut down
+		if (req == dev::Hardware::Req::EXIT) {
+			auto resp = dev::ipc::Encode(dev::ipc::MakeResponse({{"exiting", true}}));
+			server.Send(resp);
+			_hw.Request(dev::Hardware::Req::EXIT);
+			break;
+		}
+
+		auto result = _hw.Request(req, dataJ);
+
+		nlohmann::json responseJ;
+		if (result) {
+			responseJ = dev::ipc::MakeResponse(*result);
+		} else {
+			responseJ = dev::ipc::MakeErrorResponse("request failed");
+		}
+
+		auto respBytes = dev::ipc::Encode(responseJ);
+		if (!server.Send(respBytes)) {
+			std::cout << "Client disconnected during send" << std::endl;
+			server.Close();
+			if (!server.Listen(_port)) {
+				std::cerr << "Error: failed to re-listen" << std::endl;
+				return 1;
+			}
+		}
+	}
+
+	server.Close();
+	return 0;
+}
+
+// ── Entry point ──────────────────────────────────────────────────────
+int main(int argc, char* argv[])
+{
+	dev::ArgsParser args(argc, argv, "v6emul - Vector-06C Emulator");
+
+	auto romPath = args.GetString("rom", "Path to a ROM file to load", false, "");
+	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
+	auto runFrames = args.GetInt("run-frames", "Run for N frames then exit", false, 0);
+	auto runCycles = args.GetInt("run-cycles", "Run for N CPU cycles then exit", false, 0);
+	bool haltExit = args.HasFlag("halt-exit");
+	bool dumpCpu = args.HasFlag("dump-cpu");
+	bool dumpMemory = args.HasFlag("dump-memory");
+	bool serve = args.HasFlag("serve");
+	auto tcpPort = args.GetInt("tcp-port", "TCP port for IPC server (default: 9876)", false, 9876);
+	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
+
+	if (!args.IsRequirementSatisfied()) return 1;
+
+	bool testMode = haltExit || runFrames > 0 || runCycles > 0;
+
+	// Banner mode: no flags at all
+	if (!testMode && !serve) {
+		std::cout << "v6emul - Vector-06C Emulator" << std::endl;
+		std::cout << "Use --serve to start the IPC server, or" << std::endl;
+		std::cout << "    --rom <file> with --halt-exit, --run-frames, or --run-cycles for test mode." << std::endl;
+		return 0;
+	}
+
+	// Create hardware (heap-allocated due to ~2MB Memory inside)
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+
+	if (testMode) {
+		return RunTestMode(*hw, romPath, loadAddr, haltExit, runFrames, runCycles, dumpCpu, dumpMemory);
+	}
+
+	// Server mode
+	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort));
 }
