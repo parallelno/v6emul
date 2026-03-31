@@ -471,9 +471,9 @@ Options:
   -V, --version         Print version
 ```
 
-### Test-Mode Output (stdout)
+### Test-Port Output (stdout)
 
-When running with `--halt-exit`, `--run-frames`, `--run-cycles`, or any ROM that performs `OUT 0xED`:
+The emulator always prints `OUT 0xED` values to stdout, regardless of mode:
 
 ```
 TEST_OUT port=0xED value=0x42

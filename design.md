@@ -1,83 +1,170 @@
-Create an implementation plan (with recommended architecture, module boundaries, IPC protocol shape, and a test strategy) for building a Vector-06C (Soviet PC) emulator backend as a C++ CLI executable.
+# Vector-06C Emulator — Design Spec
 
-1) CLI Behavior
+### References
 
-The emulator is a command-line program.
-- It accepts an optional positional argument: a ROM file path.
-- It accepts an optional argument: close on first HLT. (for using this app as a test tool)
+| Project | URL |
+|---------|-----|
+| **Devector** | <https://github.com/parallelno/Devector> |
+| **v6_assembler** | <https://github.com/parallelno/v6_assembler> |
 
-- If a ROM path is provided:
-Load that ROM into emulator memory (document exact mapping assumptions).
-Start emulation in an ongoing loop.
+---
 
-- If no ROM path is provided:
-Start emulation in an ongoing loop with an empty memory image, but still accept external control commands over IPC.
+## 1. Product
 
+A **C++ CLI executable** (`v6emul`) that emulates the Vector-06C (Soviet PC with Intel 8080 / KR580VM80A CPU). It serves as:
 
-2) Communication / IPC Requirements
-The emulator must be easy to integrate as a backend for:
+- A **backend** for external frontends (VS Code extension, standalone ImGui app) communicating over IPC.
+- A **test harness** for [v6_assembler](https://github.com/parallelno/v6_assembler) — run assembled ROMs headlessly and capture test output.
 
-a VS Code extension (frontend sends requests and receives responses, including frames for rendering and debug stats), and
-a standalone ImGui-based app.
+---
 
-The emulator must support request/response communication with external applications. The exchanged data types must include:
+## 2. CLI Behavior
 
+```
+v6emul [OPTIONS] [ROM_FILE]
+```
 
-- Video frames:
+- **ROM_FILE** (optional positional): path to a ROM file to load into emulator memory at `--load-addr` (default `0x0000`).
+- **No ROM**: start with empty memory, accept external control commands over IPC.
+- **No stop condition** (`--halt-exit`, `--run-frames`, `--run-cycles`): start TCP IPC server and run indefinitely.
+- **With stop condition**: run headlessly, print test output to stdout, exit.
 
-Emulator can send (by request) a frame up to 50 times per second.
-Frame format: raw 24-bit RGB, 768×312. Full screen specification you can find here: https://github.com/parallelno/Devector/blob/master/src/core/display.h
-This is intentionally high bandwidth; pick a communication approach suitable for this throughput and justify your choice.
+### Stop conditions
 
-- CPU registers values (sent infrequently).
-- Breakpoints data (sent infrequently).
-- Script strings (sent very occasionally).
+| Flag | Behavior |
+|------|----------|
+| `--halt-exit` | Exit on first HLT instruction |
+| `--run-frames <N>` | Run for N frames then exit |
+| `--run-cycles <N>` | Run for N CPU cycles then exit |
 
+### Dump flags (print on exit)
 
-Design the IPC so it supports:
+| Flag | Output |
+|------|--------|
+| `--dump-cpu` | Full CPU state (registers, flags, PC, SP, cycles) |
+| `--dump-memory` | Full 64K memory dump (hex) |
+| `--dump-ramdisk <N>` | RAM-disk N (0–7) contents (hex) |
 
-low-latency control commands (pause/run/step/reset/etc.),
-an efficient way to stream frames at 50 Hz,
-clean separation between “control messages” and “frame streaming” if beneficial,
-cross-platform use (Windows/macOS/Linux) if feasible.
+### Other options
 
-3) Existing Codebase → Extraction & Refactoring
-The emulator core already exists in C++ as part of this project:
+| Flag | Purpose |
+|------|---------|
+| `--load-addr <ADDR>` | ROM load address in hex (default: `0x0000`) |
+| `--tcp-port <PORT>` | TCP port for IPC server (default: `9876`) |
+| `--speed <SPEED>` | Execution speed: `1%`, `20%`, `50%`, `100%`, `200%`, `max` |
+| `--log-level <LEVEL>` | Log verbosity: `error`, `warn`, `info`, `debug`, `trace` |
 
-Source to extract/refactor:
-https://github.com/parallelno/Devector/tree/master/src/core
+---
 
-You must propose how to extract this core into a standalone C++ CLI project while keeping it:
+## 3. IPC
 
-fast (sustains 50 fps frame output),
-easy to communicate with (IPC-first design),
-well-structured and maintainable,
-test-driven (unit + integration tests),
-suitable as a reusable backend library (static/shared lib) plus CLI wrapper.
+The emulator communicates with external frontends over **TCP loopback** on `localhost`.
 
-4) Emulator as a Test Tool for v6asm
-This emulator will also be used as a test harness for another project:
+### Transport
 
-v6asm / v6_assembler: https://github.com/parallelno/v6_assembler
+- **TCP only.** Single transport for all data (commands, responses, frames). No shared memory, no dual-transport.
+- Throughput: 768 × 312 × 3 bytes (RGB24) × 50.05 fps ≈ 36 MB/s. TCP loopback delivers ~700 MB/s — 20× headroom.
+- Cross-platform: same socket API on Windows/Linux/macOS.
 
-The emulator must be able to run ROMs produced by the assembler and emit test output generated by ROM code via the OUT instruction to a specific I/O port.
-The established test output port is defined in Devector here (use the same port):
+### Wire format
 
-https://github.com/parallelno/Devector/blob/331dd83c2b93c9e643adb37337ff7d98636bf8b9/src/core/io.cpp#L287
+- **MessagePack**, serialized via `nlohmann::json::to_msgpack()` / `from_msgpack()` (built-in, no extra library).
+- Length-prefixed framing: `uint32_t` length + MessagePack payload.
+- Frame pixel data uses `json::binary_t` → raw bytes in MessagePack (no base64).
 
-Requirement:
+### Protocol
 
-When the ROM performs OUT to that port, the emulator should capture the outgoing value(s) and print structured output to stdout (or another well-defined stream) so test runners can consume it deterministically.
+- **Pure request/response.** Client sends a request, emulator replies with a response. One response per request.
+- The wire protocol mirrors `Hardware::Request(Req, json)` directly — the `Req` enum from `hardware_consts.h` (~96 command types) is used as-is on the wire.
+- Frames are **polled** by the client via `GET_DISPLAY_DATA` at its own render rate.
 
-5) What You Should Deliver
-Provide a plan that includes:
+```jsonc
+// Client → Emulator:
+{ "cmd": 1, "data": { ... } }        // cmd = Req enum value
 
-A recommended C++ project layout (libraries/modules).
-The runtime model (emulation loop, timing, pausing/stepping).
-IPC approach options and your final recommendation (with reasoning for frame throughput).
-A sketch of a message protocol (commands/events, including frame streaming).
-Testing plan (unit tests for CPU/instructions, determinism tests, integration tests using ROMs, golden tests for OUT-port output).
-Performance considerations (zero-copy frame paths, avoiding allocations, buffering strategy, etc.).
-Extraction strategy from Devector (decoupling from GUI, removing ImGui/SDL dependencies, incremental validation).
+// Emulator → Client:
+{ "ok": true, "data": { ... } }      // result from Hardware::Request()
+```
 
-Be concrete and opinionated: propose the best design and explain tradeoffs.
+---
+
+## 4. Emulator as a Test Tool for v6_assembler
+
+The emulator always captures `OUT` instructions to the test port (`0xED`, see [io.cpp#L287](https://github.com/parallelno/Devector/blob/331dd83c/src/core/io.cpp#L287)) and prints them to stdout:
+
+```
+TEST_OUT port=0xED value=0x42
+TEST_OUT port=0xED value=0x00
+HALT at PC=0x0105 after 847231 cpu_cycles 1200 frames
+```
+
+The exit line (printed when a stop condition triggers) reports both `cpu_cycles` and `frames`. This format is consumed by test runners for deterministic assertion.
+
+---
+
+## 5. Codebase Origin: Fork from Devector
+
+The emulator core is forked from [Devector](https://github.com/parallelno/Devector):
+
+- **`core/`** → `libs/v6core/` — full emulation engine + debug subsystem (CPU, memory, I/O, display, timers, sound, FDC, debugger, breakpoints, watchpoints, disassembler, recorder, Lua scripts).
+- **`utils/`** → `libs/v6utils/` — types, threading primitives (`TQueue<T>`), JSON helpers, file I/O, string utils, CLI argument parsing (`args_parser`).
+
+The WPF build (`HAL.vcxproj`) proves these compile as a standalone library with **zero ImGui/SDL windowing/OpenGL dependencies**.
+
+### Adaptations (only 2 files)
+
+| File | Change |
+|------|--------|
+| `audio.h/cpp` | Remove SDL_AudioStream → raw sample ring buffer |
+| `keyboard.h/cpp` | Remove SDL scancodes → abstract `SetKey(row, col, pressed)` |
+
+### Not forked
+
+| File | Reason |
+|------|--------|
+| `gl_utils.h/cpp` | OpenGL rendering — not needed |
+| `halwrapper.h/cpp` | C++/CLI bridge — replaced by TCP IPC |
+| `win_gl_utils.h/cpp` | Win32 OpenGL — not needed |
+| `main_imgui/` | ImGui frontend — not needed |
+
+### Key existing interfaces (used as-is)
+
+- `Hardware::Request(Req, json) → Result<json>` — command-queue API with ~96 request types.
+- `TQueue<T>` — thread-safe bounded queue (mutex + condition_variable).
+- Debugger attached opt-in via `DEBUG_ATTACH` callback.
+
+---
+
+## 6. Architecture
+
+### Thread model
+
+Two threads:
+
+- **Emulation thread** (spawned): runs `Hardware::Execution()`, owns all mutable core state. Single-threaded, no shared mutexes on hot path. Processes requests between frames via `ReqHandling()`.
+- **Main thread**: runs TCP server loop (accept → recv → `Hardware::Request()` → send). Bridges v6ipc and v6core. In headless test mode, drives emulation directly without TCP.
+
+### Library hierarchy
+
+| Library | Role |
+|---------|------|
+| **v6utils** | Independent. Types, threading, JSON helpers, file I/O, arg parsing. |
+| **v6core** | Depends on v6utils. Full emulation engine + debug. No IPC knowledge. |
+| **v6ipc** | Depends on v6utils. TCP transport + MessagePack protocol. No emulation knowledge. |
+| **app** | Links all three. Wires IPC to core. CLI entry point. |
+
+### Dependencies
+
+| Library | Source | Purpose |
+|---------|--------|---------|
+| `nlohmann::json` | FetchContent | JSON + MessagePack serialization |
+| `LuaJIT` | ExternalProject_Add | Lua scripting (debug subsystem) |
+
+Platform APIs: TCP sockets (POSIX / Winsock2), `std::thread` + `std::atomic` (C++20).
+
+### Build
+
+- CMake 3.21+ with presets (Debug/Release/CI).
+- C++20 standard.
+- Static libraries by default.
+- CTest with standalone test executables (no test framework).
