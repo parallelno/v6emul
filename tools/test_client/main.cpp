@@ -20,6 +20,7 @@
 #include <string>
 #include <format>
 #include <thread>
+#include <chrono>
 #include <atomic>
 #include <mutex>
 
@@ -38,7 +39,6 @@ static constexpr int FRAME_W = 768;
 static constexpr int FRAME_H = 312;
 static constexpr int FRAME_PIXELS = FRAME_W * FRAME_H;
 static constexpr int FRAME_BYTES = FRAME_PIXELS * 4;
-
 // Scale factor for the window (768×312 is quite wide and short)
 static constexpr int SCALE = 2;
 
@@ -51,6 +51,7 @@ static SOCKET g_sock = INVALID_SOCKET;
 static uint16_t g_port = 9876;
 static BitmapInfoBF g_bmi{};
 static std::vector<uint8_t> g_requestBytes;
+static std::vector<uint8_t> g_statsRequestBytes;
 
 // Double-buffered frames: worker writes to back, UI reads from front
 static std::vector<uint32_t> g_frameFront(FRAME_PIXELS, 0);
@@ -61,6 +62,7 @@ static std::atomic<bool> g_frameReady{false};
 // Stats
 static std::atomic<int> g_recvCount{0};
 static std::atomic<bool> g_connected{false};
+static std::atomic<int> g_speedPercent{0};
 
 // Worker thread control
 static std::atomic<bool> g_running{true};
@@ -136,18 +138,54 @@ static void Disconnect()
 	g_connected.store(false);
 }
 
-// ── Worker thread: fetch frames as fast as possible ───────────────────
+// ── Worker thread: fetch frames at 50 fps ─────────────────────────────
 static void WorkerThread()
 {
+	using clock = std::chrono::system_clock;
+	static constexpr auto FRAME_INTERVAL = std::chrono::microseconds(20000); // 50 fps
+	static constexpr auto SLEEP_SLICE = std::chrono::microseconds(100);
+
+	DWORD lastStatsTick = GetTickCount();
+	auto endFrameTime = clock::now();
+
 	while (g_running.load()) {
 		if (!g_connected.load()) {
 			if (!ConnectToServer()) {
 				Sleep(500);
+				endFrameTime = clock::now();
 				continue;
 			}
 		}
 
-		// Send request
+		auto startFrameTime = clock::now();
+
+		// Every ~1 second, request stats (inline, doesn't skip a frame)
+		DWORD now = GetTickCount();
+		if (now - lastStatsTick >= 1000) {
+			lastStatsTick = now;
+
+			if (!SendExact(g_statsRequestBytes.data(), g_statsRequestBytes.size())) {
+				Disconnect();
+				continue;
+			}
+
+			uint32_t msgLen = 0;
+			if (!RecvExact(&msgLen, 4)) { Disconnect(); continue; }
+			if (msgLen == 0 || msgLen > 64 * 1024 * 1024) { Disconnect(); continue; }
+
+			std::vector<uint8_t> msgBuf(msgLen);
+			if (!RecvExact(msgBuf.data(), msgLen)) { Disconnect(); continue; }
+
+			try {
+				auto respJ = nlohmann::json::from_msgpack(msgBuf);
+				if (respJ.contains("data") && respJ["data"].contains("speedPercent")) {
+					g_speedPercent.store(static_cast<int>(respJ["data"]["speedPercent"].get<double>()));
+				}
+			} catch (...) {}
+			// fall through to fetch frame in the same iteration
+		}
+
+		// Send frame request
 		if (!SendExact(g_requestBytes.data(), g_requestBytes.size())) {
 			Disconnect();
 			continue;
@@ -178,6 +216,16 @@ static void WorkerThread()
 		}
 		g_frameReady.store(true);
 		g_recvCount.fetch_add(1);
+
+		// vsync: same approach as hardware.cpp
+		auto frameDuration = clock::now() - startFrameTime;
+		using DurationType = decltype(frameDuration);
+		endFrameTime += std::max<DurationType>(frameDuration, FRAME_INTERVAL);
+
+		while (clock::now() < endFrameTime)
+		{
+			std::this_thread::sleep_for(SLEEP_SLICE);
+		}
 	}
 }
 
@@ -208,8 +256,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 				g_frameCount = 0;
 				g_lastFpsTick = now;
 
-				auto title = std::format(L"v6emul test client  |  {}x{}  |  {} fps  |  {}",
-					FRAME_W, FRAME_H, g_fps,
+				auto title = std::format(L"v6emul test client  |  {}x{}  |  {} fps  |  speed {}%  |  {}",
+					FRAME_W, FRAME_H, g_fps, g_speedPercent.load(),
 					g_connected.load() ? L"connected" : L"disconnected");
 				SetWindowTextW(hwnd, title.c_str());
 			}
@@ -295,6 +343,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 		{dev::ipc::FIELD_DATA, nullptr}
 	};
 	g_requestBytes = dev::ipc::Encode(reqJ);
+
+	// Pre-encode the stats request
+	{
+		nlohmann::json statsReqJ = {
+			{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_HW_MAIN_STATS},
+			{dev::ipc::FIELD_DATA, nullptr}
+		};
+		g_statsRequestBytes = dev::ipc::Encode(statsReqJ);
+	}
 
 	// Register window class
 	WNDCLASSEXW wc{};

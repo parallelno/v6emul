@@ -136,6 +136,13 @@ void dev::Hardware::Execution()
 					// Use smaller time slice for request handling
 					ReqHandling(m_reqHandlingTime / 10);
 				}
+
+				auto actualFrameDuration = std::chrono::system_clock::now() -
+											startFrameTime;
+				auto actualUs = std::chrono::duration<double, std::micro>(actualFrameDuration).count();
+				if (actualUs > 0.0) {
+					m_actualSpeedPercent = m_execDelays[static_cast<size_t>(ExecSpeed::NORMAL)].count() / actualUs * 100.0;
+				}
 			}
 		}
 
@@ -456,6 +463,7 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 			{"inte", m_cpu.GetState().ints.inte},
 			{"iff", m_cpu.GetState().ints.iff},
 			{"hlta", m_cpu.GetState().ints.hlta},
+			{"speedPercent", m_actualSpeedPercent},
 			};
 			for (int i=0; i < IO::PALETTE_LEN; i++ ){
 				out["palette"+std::to_string(i)] = Display::VectorColorToArgb(paletteP->bytes[i]);

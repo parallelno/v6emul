@@ -100,6 +100,7 @@ namespace dev
 
 		static constexpr std::chrono::microseconds m_reqHandlingTime = 1ms;
 		ExecSpeed m_execSpeed = ExecSpeed::NORMAL;
+		double m_actualSpeedPercent = 100.0;
 		std::chrono::microseconds m_execDelays[static_cast<int>(ExecSpeed::LEN)] = {
 			1996800us/*1%*/,
 			99840us/*20%*/,

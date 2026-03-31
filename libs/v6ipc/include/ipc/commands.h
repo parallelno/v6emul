@@ -19,5 +19,6 @@ namespace dev::ipc
 	inline constexpr int CMD_PONG = -2;
 	inline constexpr int CMD_GET_FRAME = -3; // fetch raw ABGR frame buffer
 	inline constexpr int CMD_GET_FRAME_RAW = -4; // raw binary frame (no msgpack)
-
+    // Hardware::Req::GET_HW_MAIN_STATS (positive cmd values map to Req enum)
+	inline constexpr int CMD_GET_HW_MAIN_STATS = 43;
 } // namespace dev::ipc

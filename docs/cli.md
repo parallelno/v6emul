@@ -1,0 +1,108 @@
+# CLI Reference
+
+## Usage
+
+```
+v6emul [OPTIONS]
+```
+
+## Modes
+
+v6emul operates in one of three modes depending on the flags provided:
+
+| Mode | Trigger | Behavior |
+|------|---------|----------|
+| **Banner** | No mode flags | Prints usage hint and exits |
+| **Test** | `--halt-exit`, `--run-frames`, or `--run-cycles` | Loads ROM, runs headlessly, prints results to stdout, exits |
+| **Server** | `--serve` | Starts TCP IPC server, runs emulation, accepts client connections |
+
+## Options
+
+### ROM Loading
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--rom <path>` | string | *(none)* | Path to a ROM file to load into emulator memory |
+| `--load-addr <addr>` | int | `0` | Memory address to load the ROM at. Supports hex (`0x100`) and decimal (`256`) |
+
+### Execution Control
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--serve` | flag | — | Start the TCP IPC server |
+| `--speed <speed>` | string | *(normal)* | Execution speed: `1%`, `20%`, `50%`, `100%`, `200%`, `max` |
+| `--tcp-port <port>` | int | `9876` | TCP port for the IPC server |
+
+### Stop Conditions (Test Mode)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--halt-exit` | flag | — | Exit on first HLT instruction |
+| `--run-frames <N>` | int | `0` | Run for N frames then exit |
+| `--run-cycles <N>` | int | `0` | Run for N CPU cycles then exit |
+
+### Dump Flags (Test Mode)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--dump-cpu` | flag | — | Print full CPU state on exit (registers, flags, PC, SP, cycles) |
+| `--dump-memory` | flag | — | Print full 64K memory dump (hex) on exit |
+| `--dump-ramdisk <N>` | int | `-1` | Print RAM-disk N (0–7) contents on exit |
+
+### Other
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--log-level <level>` | string | `info` | Log verbosity: `error`, `warn`, `info`, `debug`, `trace` |
+| `--version`, `-V` | flag | — | Print version and exit |
+| `-h`, `--help` | flag | — | Print help and exit |
+
+## Examples
+
+### Start IPC server with a ROM at address 0x100
+
+```bash
+v6emul --rom game.rom --load-addr 0x100 --serve
+```
+
+### Run at maximum speed
+
+```bash
+v6emul --rom game.rom --load-addr 0x100 --serve --speed max
+```
+
+### Headless test: run until HLT, dump CPU state
+
+```bash
+v6emul --rom test.rom --halt-exit --dump-cpu
+```
+
+### Run for exactly 1000 frames
+
+```bash
+v6emul --rom test.rom --run-frames 1000 --dump-cpu
+```
+
+### Use a custom TCP port
+
+```bash
+v6emul --rom game.rom --serve --tcp-port 12345
+```
+
+## Test Output Format
+
+In test mode, the emulator captures `OUT` instructions to the test port (`0xED`) and prints them to stdout:
+
+```
+TEST_OUT port=0xED value=0x42
+TEST_OUT port=0xED value=0x00
+HALT at PC=0x0105 after 847231 cpu_cycles 1200 frames
+```
+
+The exit line reports the stop reason (`HALT` or `EXIT`), the program counter, cycle count, and frame count. This format is consumed by test runners for deterministic assertions.
+
+## Error Handling
+
+- Unknown arguments produce an error message and print the help text.
+- Missing required argument values print a requirement message.
+- ROM load failures print an error and exit with code 1.
