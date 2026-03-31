@@ -1,0 +1,3 @@
+TEST_OUT port=0xED value=0x1E
+TEST_OUT port=0xED value=0x0A
+HALT at PC=0x000A after 56 cpu_cycles 0 frames

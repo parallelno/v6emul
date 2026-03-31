@@ -84,6 +84,8 @@ namespace dev
 		void AttachDebugFuncs(
 			DebugFunc _debugFunc, DebugReqHandlingFunc _debugReqHandlingFunc);
 
+		void SetDebugPortOutCallback(IO::DebugPortOutFunc _func);
+
 
 	private:
 		DebugFunc Debug = nullptr;
@@ -113,6 +115,7 @@ namespace dev
 		void ExecuteFrameNoBreaks();
 		void ReqHandling(
 			const std::chrono::duration<int64_t, std::nano> _waitTime = -1ns);
+		auto RunHeadless(const nlohmann::json& _dataJ) -> nlohmann::json;
 		void Reset();
 		void Restart();
 		void Stop();

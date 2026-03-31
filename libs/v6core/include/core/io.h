@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <array>
+#include <functional>
 
 #include "utils/json_utils.h"
 #include "utils/types.h"
@@ -26,6 +27,8 @@ namespace dev
 		static constexpr int DISPLAY_MODE_COMMIT_TIME = 2 * 4;
 
 	public:
+		using DebugPortOutFunc = std::function<void(uint8_t port, uint8_t value)>;
+
 		static constexpr uint8_t PORT_OUT_BORDER_COLOR0 = 0x0C;
 		static constexpr uint8_t PORT_OUT_BORDER_COLOR1 = 0x0D;
 		static constexpr uint8_t PORT_OUT_BORDER_COLOR2 = 0x0E;
@@ -128,6 +131,8 @@ namespace dev
 		int m_paletteCommitTime = PALETTE_COMMIT_TIME;
 		int m_displayModeTime = DISPLAY_MODE_COMMIT_TIME;
 
+		DebugPortOutFunc m_debugPortOutFunc = nullptr;
+
 		void PortOutHandling(uint8_t _port, uint8_t _value);
 		auto PortInHandling(uint8_t _port) -> uint8_t;
 
@@ -159,5 +164,6 @@ namespace dev
 		auto GetPortsOutData() const -> const PortsData* { return &m_portsOutData; }
 		auto GetBeeper() const -> uint8_t { return m_state.ports.portC & 1; } // it also out to the tape
 		void TryToCommit(const uint8_t _colorIdx);
+		void SetDebugPortOutCallback(DebugPortOutFunc _func) { m_debugPortOutFunc = std::move(_func); }
 	};
 }

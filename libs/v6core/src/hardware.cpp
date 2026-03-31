@@ -44,6 +44,11 @@ void dev::Hardware::AttachDebugFuncs(DebugFunc _debugFunc, DebugReqHandlingFunc 
 	DebugReqHandling = _debugReqHandlingFunc;
 }
 
+void dev::Hardware::SetDebugPortOutCallback(IO::DebugPortOutFunc _func)
+{
+	m_io.SetDebugPortOutCallback(std::move(_func));
+}
+
 // outputs true if the execution breaks
 bool dev::Hardware::ExecuteInstruction()
 {
@@ -486,6 +491,10 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		m_fdc.ResetUpdate(dataJ["driveIdx"]);
 		break;
 
+	case Req::RUN_HEADLESS:
+		out = RunHeadless(dataJ);
+		break;
+
 	case Req::DEBUG_ATTACH:
 		m_debugAttached = dataJ["data"];
 		break;
@@ -703,6 +712,50 @@ void dev::Hardware::ExecuteFrameNoBreaks()
 	do {
 		ExecuteInstruction();
 	} while (m_display.GetFrameNum() == frameNum);
+}
+
+auto dev::Hardware::RunHeadless(const nlohmann::json& _dataJ) -> nlohmann::json
+{
+	const bool haltExit = _dataJ.value("haltExit", false);
+	const uint64_t maxFrames = _dataJ.value("maxFrames", uint64_t(0));
+	const uint64_t maxCycles = _dataJ.value("maxCycles", uint64_t(0));
+
+	const auto startCC = m_cpu.GetCC();
+	const auto startFrame = m_display.GetFrameNum();
+
+	while (true) {
+		// Execute one instruction
+		m_memory.DebugInit();
+		do {
+			m_display.Rasterize();
+			m_cpu.ExecuteMachineCycle(m_display.IsIRQ());
+			m_audio.Clock(2, m_io.GetBeeper());
+		} while (!m_cpu.IsInstructionExecuted());
+
+		// Check halt
+		if (haltExit && m_cpu.GetHLTA()) break;
+
+		// Check cycle limit
+		if (maxCycles > 0 && (m_cpu.GetCC() - startCC) >= maxCycles) break;
+
+		// Check frame limit
+		if (maxFrames > 0 && (m_display.GetFrameNum() - startFrame) >= maxFrames) break;
+	}
+
+	auto elapsedCC = m_cpu.GetCC() - startCC;
+	auto elapsedFrames = m_display.GetFrameNum() - startFrame;
+
+	return {
+		{"cc", elapsedCC},
+		{"frames", elapsedFrames},
+		{"halted", m_cpu.GetHLTA()},
+		{"pc", m_cpu.GetPC()},
+		{"sp", m_cpu.GetSP()},
+		{"af", m_cpu.GetPSW()},
+		{"bc", m_cpu.GetBC()},
+		{"de", m_cpu.GetDE()},
+		{"hl", m_cpu.GetHL()}
+	};
 }
 
 auto dev::Hardware::GetStepOverAddr()

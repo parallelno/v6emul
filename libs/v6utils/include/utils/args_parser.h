@@ -60,6 +60,8 @@ namespace dev
 
 		bool IsRequirementSatisfied() const;
 
+		bool HasFlag(const std::string& _arg) const;
+
 		// deleted to prevent implicit convertion into bool type of the _required parameter in case thee user mixed up the parameters
 		template <typename T>
 		double GetDouble(const std::string& _arg,

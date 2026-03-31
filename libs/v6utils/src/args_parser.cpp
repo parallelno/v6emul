@@ -16,7 +16,9 @@ dev::ArgsParser::ArgsParser(int& _argc, char** _argv,
 		// wait for the first param name
 		if (_argv[i][0] == '-')
 		{
-			const std::string paramName = _argv[i]+1;
+			const char* nameStart = _argv[i] + 1;
+			if (*nameStart == '-') nameStart++; // handle --param style
+			const std::string paramName = nameStart;
 			std::string value;
 
 			if (i + 1 < argc && _argv[i+1][0] != '-')
@@ -117,4 +119,9 @@ bool dev::ArgsParser::IsRequirementSatisfied() const
 {
 	PrintHelp();
 	return m_requirementSatisfied;
+}
+
+bool dev::ArgsParser::HasFlag(const std::string& _arg) const
+{
+	return m_args.contains(_arg);
 }

@@ -281,9 +281,9 @@ void dev::IO::PortOutHandling(uint8_t _port, uint8_t _value)
 		break;
 		// Sends data to the emulator
 	case 0xED:
-		// TODO: do something meaningful.
-		// For example: write to a file, breaks the app,
-		// or let the emulator execute a custom command depending on the _value
+		if (m_debugPortOutFunc) {
+			m_debugPortOutFunc(_port, _value);
+		}
 		dev::Log("Debug Port (0xED) out: {}", _value);
 		break;
 	default:
