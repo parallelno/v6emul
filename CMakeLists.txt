@@ -89,6 +89,7 @@ add_subdirectory(libs/v6utils)
 add_subdirectory(libs/v6core)
 add_subdirectory(libs/v6ipc)
 add_subdirectory(app)
+add_subdirectory(tools/test_client)
 
 # ── Testing ────────────────────────────────────────────────────────────
 
