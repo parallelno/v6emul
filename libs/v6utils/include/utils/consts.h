@@ -1,0 +1,37 @@
+#pragma once
+
+#include "utils/types.h"
+
+namespace dev
+{
+	static constexpr int MAIN_WINDOW_W = 820;
+	static constexpr int MAIN_WINDOW_H = 670;
+	static constexpr int MAIN_WINDOW_X = 0;
+	static constexpr int MAIN_WINDOW_Y = 32;
+	static constexpr float DEFAULT_FONT_SCALE = 1.0f;
+	static const char* DEFAULT_FONT_PATH = "fonts//medium.ttf";
+	static const char* DEFAULT_FONT_ITALIC_PATH = "fonts//medium_italic.ttf";
+
+	static const char* ConditionsS[] = {
+		"=ANY", "=", "<", ">",
+		"<=", ">=", "!=" };
+
+
+	enum class ErrCode : int {
+		UNSPECIFIED = -1,
+		NO_ERRORS = 0,
+		NO_FILES,
+		FAILED_SDL_INIT,
+		FAILED_CREATION_WINDOW,
+		FAILED_SDL_GET_DISPLAY_BOUNDS,
+		FAILED_OPENGL_INIT,
+		UNRECOGNIZED_CPU_INSTR,
+		INVALID_ID,
+		WARNING_FDD_IMAGE_TOO_BIG,
+	};
+
+	static constexpr int DELAYED_SELECTION_TIME = 6;
+
+	static constexpr Id INVALID_ID = -1;
+
+}
