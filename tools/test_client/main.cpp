@@ -22,6 +22,12 @@
 #include "ipc/protocol.h"
 #include "ipc/commands.h"
 
+// ── DIB with BI_BITFIELDS for direct ABGR rendering ──────────────────
+struct BitmapInfoBF {
+	BITMAPINFOHEADER bmiHeader;
+	DWORD masks[3]; // R, G, B channel masks
+};
+
 // ── Frame constants (must match Display) ──────────────────────────────
 static constexpr int FRAME_W = 768;
 static constexpr int FRAME_H = 312;
@@ -40,10 +46,12 @@ static SOCKET g_sock = INVALID_SOCKET;
 static std::vector<uint32_t> g_frameBuf(FRAME_PIXELS, 0);
 static bool g_connected = false;
 static uint16_t g_port = 9876;
-static BITMAPINFO g_bmi{};
+static BitmapInfoBF g_bmi{};
 static int g_fps = 0;
 static int g_frameCount = 0;
 static DWORD g_lastFpsTick = 0;
+// Pre-encoded request bytes (built once, reused every frame)
+static std::vector<uint8_t> g_requestBytes;
 
 // ── Socket helpers ────────────────────────────────────────────────────
 static bool RecvExact(void* buf, size_t len)
@@ -111,68 +119,39 @@ static void Disconnect()
 	g_connected = false;
 }
 
-// ── Protocol: send request, receive response ──────────────────────────
-static bool SendRequest(const nlohmann::json& reqJ)
-{
-	auto encoded = dev::ipc::Encode(reqJ);
-	return SendExact(encoded.data(), encoded.size());
-}
-
-static bool RecvResponse(nlohmann::json& outJ)
-{
-	uint32_t len = 0;
-	if (!RecvExact(&len, 4)) return false;
-
-	// Sanity check (64MB max)
-	if (len > 64 * 1024 * 1024) return false;
-
-	std::vector<uint8_t> payload(len);
-	if (!RecvExact(payload.data(), len)) return false;
-
-	outJ = dev::ipc::Decode(payload);
-	return true;
-}
-
-// ── Fetch one frame from the emulator ─────────────────────────────────
+// ── Fetch one frame from the emulator (raw binary protocol) ──────────
+// Wire format: [4:payloadLen][4:width][4:height][raw ABGR pixels]
+// Receives directly into g_frameBuf — zero intermediate allocations.
 static bool FetchFrame()
 {
 	if (!g_connected) {
 		if (!ConnectToServer()) return false;
 	}
 
-	nlohmann::json reqJ = {
-		{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_FRAME},
-		{dev::ipc::FIELD_DATA, nullptr}
-	};
-
-	if (!SendRequest(reqJ)) {
+	// Send pre-encoded request
+	if (!SendExact(g_requestBytes.data(), g_requestBytes.size())) {
 		Disconnect();
 		return false;
 	}
 
-	nlohmann::json respJ;
-	if (!RecvResponse(respJ)) {
+	// Read raw response: [4:payloadLen][4:width][4:height][pixels]
+	uint32_t payloadLen = 0;
+	if (!RecvExact(&payloadLen, 4)) { Disconnect(); return false; }
+
+	if (payloadLen < 8 || payloadLen > 64 * 1024 * 1024) { Disconnect(); return false; }
+
+	uint32_t width = 0, height = 0;
+	if (!RecvExact(&width, 4)) { Disconnect(); return false; }
+	if (!RecvExact(&height, 4)) { Disconnect(); return false; }
+
+	size_t pixelBytes = payloadLen - 8;
+	if (width != FRAME_W || height != FRAME_H || pixelBytes != FRAME_BYTES) {
 		Disconnect();
 		return false;
 	}
 
-	if (!respJ.value(dev::ipc::FIELD_OK, false)) return false;
-
-	auto& data = respJ[dev::ipc::FIELD_DATA];
-	if (!data.contains("pixels")) return false;
-
-	auto& pixBin = data["pixels"].get_binary();
-	if (pixBin.size() != static_cast<size_t>(FRAME_BYTES)) return false;
-
-	// Copy and convert ABGR (0xFFBBGGRR) → BGRA for DIB (0x00RRGGBB as uint32 LE)
-	auto* src = reinterpret_cast<const uint32_t*>(pixBin.data());
-	for (int i = 0; i < FRAME_PIXELS; ++i) {
-		uint32_t px = src[i];
-		uint32_t r = (px >>  0) & 0xFF;
-		uint32_t g = (px >>  8) & 0xFF;
-		uint32_t b = (px >> 16) & 0xFF;
-		g_frameBuf[i] = (r << 16) | (g << 8) | b;
-	}
+	// Receive pixel data directly into the display buffer
+	if (!RecvExact(g_frameBuf.data(), pixelBytes)) { Disconnect(); return false; }
 
 	return true;
 }
@@ -223,7 +202,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		StretchDIBits(hdc,
 			0, 0, clientW, clientH,   // dest
 			0, 0, FRAME_W, FRAME_H,   // src
-			g_frameBuf.data(), &g_bmi,
+			g_frameBuf.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmi),
 			DIB_RGB_COLORS, SRCCOPY);
 
 		EndPaint(hwnd, &ps);
@@ -266,13 +245,23 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 		return 1;
 	}
 
-	// Set up DIB info (top-down via negative height)
+	// Set up DIB info: BI_BITFIELDS for direct ABGR rendering (no per-pixel conversion)
 	g_bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 	g_bmi.bmiHeader.biWidth = FRAME_W;
 	g_bmi.bmiHeader.biHeight = -FRAME_H; // top-down
 	g_bmi.bmiHeader.biPlanes = 1;
 	g_bmi.bmiHeader.biBitCount = 32;
-	g_bmi.bmiHeader.biCompression = BI_RGB;
+	g_bmi.bmiHeader.biCompression = BI_BITFIELDS;
+	g_bmi.masks[0] = 0x000000FF; // R in low byte
+	g_bmi.masks[1] = 0x0000FF00; // G
+	g_bmi.masks[2] = 0x00FF0000; // B
+
+	// Pre-encode the frame request (reused every frame)
+	nlohmann::json reqJ = {
+		{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_FRAME_RAW},
+		{dev::ipc::FIELD_DATA, nullptr}
+	};
+	g_requestBytes = dev::ipc::Encode(reqJ);
 
 	// Register window class
 	WNDCLASSEXW wc{};

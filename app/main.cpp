@@ -214,6 +214,32 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
 			continue;
 		}
 
+		// Raw binary frame: [4:payloadLen][4:width][4:height][raw ABGR pixels]
+		// Bypasses json/msgpack for high-throughput frame streaming.
+		if (cmdInt == dev::ipc::CMD_GET_FRAME_RAW) {
+			auto* fb = _hw.GetFrame(false);
+			if (fb) {
+				size_t pixLen = fb->size() * sizeof(dev::ColorI);
+				uint32_t payloadLen = static_cast<uint32_t>(8 + pixLen);
+				uint32_t w = dev::Display::FRAME_W;
+				uint32_t h = dev::Display::FRAME_H;
+
+				// Reuse a static buffer to avoid per-frame allocation
+				static std::vector<uint8_t> rawMsg;
+				rawMsg.resize(4 + 8 + pixLen);
+				std::memcpy(rawMsg.data(), &payloadLen, 4);
+				std::memcpy(rawMsg.data() + 4, &w, 4);
+				std::memcpy(rawMsg.data() + 8, &h, 4);
+				std::memcpy(rawMsg.data() + 12, fb->data(), pixLen);
+				server.Send(rawMsg);
+			} else {
+				auto errResp = dev::ipc::Encode(
+					dev::ipc::MakeErrorResponse("no frame available"));
+				server.Send(errResp);
+			}
+			continue;
+		}
+
 		// Dispatch to Hardware::Request()
 		auto req = static_cast<dev::Hardware::Req>(cmdInt);
 
