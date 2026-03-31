@@ -4,6 +4,8 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <atomic>
+#include <csignal>
 
 #include "core/hardware.h"
 #include "core/memory.h"
@@ -119,24 +121,39 @@ static int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
 }
 
 // ── IPC server mode: TCP recv loop → Hardware::Request() → response ──
+static std::atomic<bool> g_shutdown{false};
+static dev::ipc::Transport* g_serverPtr = nullptr;
+
+static void SignalHandler(int)
+{
+	g_shutdown.store(true);
+	// Close the server sockets to unblock accept()/recv()
+	if (g_serverPtr) g_serverPtr->Close();
+}
+
 static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
 {
+	std::signal(SIGINT, SignalHandler);
+	std::signal(SIGTERM, SignalHandler);
+
 	dev::ipc::Transport server;
+	g_serverPtr = &server;
 
 	if (!server.Listen(_port)) {
 		std::cerr << std::format("Error: failed to listen on port {}", _port) << std::endl;
 		return 1;
 	}
 
-	std::cout << std::format("IPC server listening on 127.0.0.1:{}", server.GetPort()) << std::endl;
+	std::cout << std::format("IPC server listening on 127.0.0.1:{} (Ctrl+C to stop)", server.GetPort()) << std::endl;
 
 	// Start emulation in RUN state
 	_hw.Request(dev::Hardware::Req::RUN);
 
-	while (true) {
+	while (!g_shutdown.load()) {
 		if (!server.IsClientConnected()) {
 			std::cout << "Waiting for client..." << std::endl;
 			if (!server.AcceptClient()) {
+				if (g_shutdown.load()) break;
 				std::cerr << "Error: failed to accept client" << std::endl;
 				continue;
 			}
@@ -146,6 +163,7 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
 		// Receive one message
 		auto payload = server.Recv();
 		if (payload.empty()) {
+			if (g_shutdown.load()) break;
 			std::cout << "Client disconnected" << std::endl;
 			server.Close();
 			// Re-listen for next client
@@ -228,6 +246,11 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
 	}
 
 	server.Close();
+	g_serverPtr = nullptr;
+	if (g_shutdown.load()) {
+		std::cout << "\nShutting down..." << std::endl;
+		_hw.Request(dev::Hardware::Req::EXIT);
+	}
 	return 0;
 }
 
@@ -286,6 +309,22 @@ int main(int argc, char* argv[])
 
 	if (testMode) {
 		return RunTestMode(*hw, romPath, loadAddr, haltExit, runFrames, runCycles, dumpCpu, dumpMemory, dumpRamdisk);
+	}
+
+	// Server mode: load ROM if provided
+	if (!romPath.empty()) {
+		auto res = dev::LoadFile(romPath);
+		if (!res) {
+			std::cerr << std::format("Error: failed to load ROM file: {}", romPath) << std::endl;
+			return 1;
+		}
+		std::cout << std::format("Loading ROM: {} ({} bytes) at 0x{:04X}", romPath, res->size(), loadAddr) << std::endl;
+		nlohmann::json setMemJ = {
+			{"addr", loadAddr},
+			{"data", *res}
+		};
+		hw->Request(dev::Hardware::Req::SET_MEM, setMemJ);
+		hw->Request(dev::Hardware::Req::RESTART);
 	}
 
 	// Server mode

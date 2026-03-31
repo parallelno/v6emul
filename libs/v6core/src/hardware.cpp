@@ -25,8 +25,12 @@ dev::Hardware::Hardware(const std::string& _pathBootData,
 
 dev::Hardware::~Hardware()
 {
-	Request(Hardware::Req::EXIT);
-	m_executionThread.join();
+	if (m_status != Status::EXIT) {
+		Request(Hardware::Req::EXIT);
+	}
+	if (m_executionThread.joinable()) {
+		m_executionThread.join();
+	}
 }
 
 // when HW needs Reset

@@ -9,22 +9,28 @@ dev::Memory::Memory(const std::string& _pathBootData, const std::string& _pathRa
 	m_pathRamDiskData(_pathRamDiskData),
 	m_ramDiskClearAfterRestart(_ramDiskClearAfterRestart)
 {
-	auto res = dev::LoadFile(dev::GetExecutableDir() + _pathBootData);
-	if (res) m_rom = *res;
+	if (!_pathBootData.empty()) {
+		auto res = dev::LoadFile(dev::GetExecutableDir() + _pathBootData);
+		if (res) m_rom = *res;
+	}
 
-	res = dev::LoadFile(dev::GetExecutableDir() + _pathRamDiskData);
-	if (res) {
-		RamDiskData ramDiskData = *res;
-		ramDiskData.resize(MEMORY_RAMDISK_LEN * RAM_DISK_MAX);
-		std::copy(ramDiskData.begin(), ramDiskData.end(), m_ram.data() + MEMORY_MAIN_LEN);
+	if (!_pathRamDiskData.empty()) {
+		auto res = dev::LoadFile(dev::GetExecutableDir() + _pathRamDiskData);
+		if (res) {
+			RamDiskData ramDiskData = *res;
+			ramDiskData.resize(MEMORY_RAMDISK_LEN * RAM_DISK_MAX);
+			std::copy(ramDiskData.begin(), ramDiskData.end(), m_ram.data() + MEMORY_MAIN_LEN);
+		}
 	}
 }
 
 dev::Memory::~Memory()
 {
 	// store RamDisk
-	RamDiskData ramDiskData(m_ram.begin() + MEMORY_MAIN_LEN, m_ram.end());
-	dev::SaveFile(dev::GetExecutableDir() + m_pathRamDiskData, ramDiskData, true);
+	if (!m_pathRamDiskData.empty()) {
+		RamDiskData ramDiskData(m_ram.begin() + MEMORY_MAIN_LEN, m_ram.end());
+		dev::SaveFile(dev::GetExecutableDir() + m_pathRamDiskData, ramDiskData, true);
+	}
 }
 void dev::Memory::Init()
 {
