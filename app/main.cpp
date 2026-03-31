@@ -305,6 +305,7 @@ int main(int argc, char* argv[])
 	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
 
 	if (!args.IsRequirementSatisfied()) return 1;
+	if (!args.CheckUnknownArgs()) return 1;
 
 	bool testMode = haltExit || runFrames > 0 || runCycles > 0;
 

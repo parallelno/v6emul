@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 #include <string>
 #include <any>
 
@@ -26,6 +27,7 @@ namespace dev
 		using Required = bool;
 
 		std::map <ArgName, std::string> m_args;
+		std::set<std::string> m_knownArgs;
 		std::string m_help;
 		bool m_requirementSatisfied = true;
 
@@ -60,7 +62,9 @@ namespace dev
 
 		bool IsRequirementSatisfied() const;
 
-		bool HasFlag(const std::string& _arg) const;
+		bool HasFlag(const std::string& _arg);
+
+		bool CheckUnknownArgs() const;
 
 		// deleted to prevent implicit convertion into bool type of the _required parameter in case thee user mixed up the parameters
 		template <typename T>

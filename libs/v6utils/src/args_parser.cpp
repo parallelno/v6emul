@@ -43,6 +43,7 @@ auto dev::ArgsParser::GetString(const std::string& _arg,
 	const ArgHelp& _help, const bool _required, const std::string& _defaultV)
 ->const std::string
 {
+	m_knownArgs.insert(_arg);
 	AddParamToHelp(_arg, ArgType::STRING, _required, _defaultV, _help );
 
 	if (!m_args.contains(_arg) || m_args[_arg].empty())
@@ -57,6 +58,7 @@ auto dev::ArgsParser::GetString(const std::string& _arg,
 double dev::ArgsParser::GetDouble(const std::string& _arg,
 	const ArgHelp& _help, const bool _required, const double _defaultV)
 {
+	m_knownArgs.insert(_arg);
 	AddParamToHelp(_arg, ArgType::DOUBLE, _required, _defaultV, _help );
 
 	if (!m_args.contains(_arg) || m_args[_arg].empty())
@@ -71,6 +73,7 @@ double dev::ArgsParser::GetDouble(const std::string& _arg,
 int dev::ArgsParser::GetInt(const std::string& _arg,
 	const ArgHelp& _help, const bool _required, const int _defaultV)
 {
+	m_knownArgs.insert(_arg);
 	AddParamToHelp(_arg, ArgType::INT, _required, _defaultV, _help );
 
 	if (!m_args.contains(_arg) || m_args[_arg].empty())
@@ -78,7 +81,7 @@ int dev::ArgsParser::GetInt(const std::string& _arg,
 		if (_required) ArgsParser::RequirementMsg(_arg);
 		return _defaultV;
 	}
-	return strtol(m_args[_arg].c_str(), nullptr, 10);
+	return static_cast<int>(strtol(m_args[_arg].c_str(), nullptr, 0));
 }
 
 void dev::ArgsParser::AddDescriptionToHelp(const std::string& _description)
@@ -121,7 +124,24 @@ bool dev::ArgsParser::IsRequirementSatisfied() const
 	return m_requirementSatisfied;
 }
 
-bool dev::ArgsParser::HasFlag(const std::string& _arg) const
+bool dev::ArgsParser::HasFlag(const std::string& _arg)
 {
+	m_knownArgs.insert(_arg);
 	return m_args.contains(_arg);
+}
+
+bool dev::ArgsParser::CheckUnknownArgs() const
+{
+	bool allKnown = true;
+	for (const auto& [name, value] : m_args) {
+		if (name == "h" || name == "help") continue;
+		if (!m_knownArgs.contains(name)) {
+			std::cerr << std::format("Error: unknown argument: --{}\n", name);
+			allKnown = false;
+		}
+	}
+	if (!allKnown) {
+		std::cout << std::format("\n{}", m_help);
+	}
+	return allKnown;
 }
