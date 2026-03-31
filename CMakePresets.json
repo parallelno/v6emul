@@ -29,15 +29,20 @@
     "buildPresets": [
         {
             "name": "debug",
-            "configurePreset": "debug"
+            "configurePreset": "debug",
+            "jobs": 0
         },
         {
             "name": "release",
-            "configurePreset": "release"
+            "configurePreset": "release",
+            "configuration": "Release",
+            "jobs": 0
         },
         {
             "name": "ci",
-            "configurePreset": "ci"
+            "configurePreset": "ci",
+            "configuration": "Release",
+            "jobs": 0
         }
     ]
 }

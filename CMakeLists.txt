@@ -11,6 +11,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Enable parallel compilation for MSVC
+if(MSVC)
+    add_compile_options(/MP)
+endif()
+
 # ── External dependencies ──────────────────────────────────────────────
 
 include(FetchContent)
