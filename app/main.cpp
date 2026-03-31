@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "core/hardware.h"
+#include "core/memory.h"
 #include "utils/utils.h"
 #include "utils/args_parser.h"
 #include "ipc/transport.h"
@@ -17,7 +18,7 @@ static constexpr uint8_t TEST_PORT = 0xED;
 // ── Test mode: load ROM, run headless, print results ─────────────────
 static int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
 	int _loadAddr, bool _haltExit, int _runFrames, int _runCycles,
-	bool _dumpCpu, bool _dumpMemory)
+	bool _dumpCpu, bool _dumpMemory, int _dumpRamdisk)
 {
 	// Load ROM file
 	std::vector<uint8_t> romData;
@@ -92,6 +93,22 @@ static int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
 				std::cout << std::format("{:04X}:", addr);
 				for (int j = 0; j < 16; j++) {
 					std::cout << std::format(" {:02X}", (*ram)[addr + j]);
+				}
+				std::cout << std::endl;
+			}
+		}
+	}
+
+	if (_dumpRamdisk >= 0 && _dumpRamdisk < static_cast<int>(dev::Memory::RAM_DISK_MAX)) {
+		auto ram = _hw.GetRam();
+		if (ram) {
+			size_t base = dev::Memory::MEMORY_MAIN_LEN
+				+ static_cast<size_t>(_dumpRamdisk) * dev::Memory::MEMORY_RAMDISK_LEN;
+			std::cout << std::format("RAMDISK {}:", _dumpRamdisk) << std::endl;
+			for (size_t offset = 0; offset < dev::Memory::MEMORY_RAMDISK_LEN; offset += 16) {
+				std::cout << std::format("{:06X}:", offset);
+				for (int j = 0; j < 16; j++) {
+					std::cout << std::format(" {:02X}", (*ram)[base + offset + j]);
 				}
 				std::cout << std::endl;
 			}
@@ -219,6 +236,12 @@ int main(int argc, char* argv[])
 {
 	dev::ArgsParser args(argc, argv, "v6emul - Vector-06C Emulator");
 
+	// Check for --version early
+	if (args.HasFlag("version") || args.HasFlag("V")) {
+		std::cout << "v6emul 0.1.0" << std::endl;
+		return 0;
+	}
+
 	auto romPath = args.GetString("rom", "Path to a ROM file to load", false, "");
 	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
 	auto runFrames = args.GetInt("run-frames", "Run for N frames then exit", false, 0);
@@ -226,8 +249,10 @@ int main(int argc, char* argv[])
 	bool haltExit = args.HasFlag("halt-exit");
 	bool dumpCpu = args.HasFlag("dump-cpu");
 	bool dumpMemory = args.HasFlag("dump-memory");
+	auto dumpRamdisk = args.GetInt("dump-ramdisk", "Print RAM-disk N (0-7) contents on exit", false, -1);
 	bool serve = args.HasFlag("serve");
 	auto tcpPort = args.GetInt("tcp-port", "TCP port for IPC server (default: 9876)", false, 9876);
+	auto speed = args.GetString("speed", "Execution speed: 1%, 20%, 50%, 100%, 200%, max", false, "");
 	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
 
 	if (!args.IsRequirementSatisfied()) return 1;
@@ -245,8 +270,22 @@ int main(int argc, char* argv[])
 	// Create hardware (heap-allocated due to ~2MB Memory inside)
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 
+	// Apply speed setting if provided
+	if (!speed.empty()) {
+		int speedIdx = -1;
+		if (speed == "1%")   speedIdx = static_cast<int>(dev::Hardware::ExecSpeed::_1PERCENT);
+		else if (speed == "20%")  speedIdx = static_cast<int>(dev::Hardware::ExecSpeed::_20PERCENT);
+		else if (speed == "50%")  speedIdx = static_cast<int>(dev::Hardware::ExecSpeed::HALF);
+		else if (speed == "100%") speedIdx = static_cast<int>(dev::Hardware::ExecSpeed::NORMAL);
+		else if (speed == "200%") speedIdx = static_cast<int>(dev::Hardware::ExecSpeed::X2);
+		else if (speed == "max")  speedIdx = static_cast<int>(dev::Hardware::ExecSpeed::MAX);
+		if (speedIdx >= 0) {
+			hw->Request(dev::Hardware::Req::SET_CPU_SPEED, {{"speed", speedIdx}});
+		}
+	}
+
 	if (testMode) {
-		return RunTestMode(*hw, romPath, loadAddr, haltExit, runFrames, runCycles, dumpCpu, dumpMemory);
+		return RunTestMode(*hw, romPath, loadAddr, haltExit, runFrames, runCycles, dumpCpu, dumpMemory, dumpRamdisk);
 	}
 
 	// Server mode
