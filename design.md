@@ -1,4 +1,4 @@
-Create an implementation plan (with recommended architecture, module boundaries, IPC protocol shape, and a test strategy) for building a Vector-06C (Soviet PC) emulator backend as a Rust CLI executable.
+Create an implementation plan (with recommended architecture, module boundaries, IPC protocol shape, and a test strategy) for building a Vector-06C (Soviet PC) emulator backend as a C++ CLI executable.
 
 1) CLI Behavior
 
@@ -41,19 +41,19 @@ an efficient way to stream frames at 50 Hz,
 clean separation between “control messages” and “frame streaming” if beneficial,
 cross-platform use (Windows/macOS/Linux) if feasible.
 
-3) Existing Codebase → Rust Port
+3) Existing Codebase → Extraction & Refactoring
 The emulator core already exists in C++ as part of this project:
 
-Source to translate/port:
+Source to extract/refactor:
 https://github.com/parallelno/Devector/tree/master/src/core
 
-You must propose how to translate it to Rust while keeping the project:
+You must propose how to extract this core into a standalone C++ CLI project while keeping it:
 
 fast (sustains 50 fps frame output),
 easy to communicate with (IPC-first design),
 well-structured and maintainable,
 test-driven (unit + integration tests),
-suitable as a reusable backend library (core crate) plus CLI wrapper.
+suitable as a reusable backend library (static/shared lib) plus CLI wrapper.
 
 4) Emulator as a Test Tool for v6asm
 This emulator will also be used as a test harness for another project:
@@ -72,12 +72,12 @@ When the ROM performs OUT to that port, the emulator should capture the outgoing
 5) What You Should Deliver
 Provide a plan that includes:
 
-A recommended Rust workspace layout (crates/modules).
+A recommended C++ project layout (libraries/modules).
 The runtime model (emulation loop, timing, pausing/stepping).
 IPC approach options and your final recommendation (with reasoning for frame throughput).
 A sketch of a message protocol (commands/events, including frame streaming).
 Testing plan (unit tests for CPU/instructions, determinism tests, integration tests using ROMs, golden tests for OUT-port output).
 Performance considerations (zero-copy frame paths, avoiding allocations, buffering strategy, etc.).
-Migration strategy from C++ (mapping major components, minimizing behavior drift, incremental validation).
+Extraction strategy from Devector (decoupling from GUI, removing ImGui/SDL dependencies, incremental validation).
 
 Be concrete and opinionated: propose the best design and explain tradeoffs.

@@ -1,58 +1,106 @@
 # Vector-06C Emulator — Implementation Plan
 
-## 1. Rust Workspace Layout
+### References
+
+| Project | URL | Role |
+|---------|-----|------|
+| **Devector** | <https://github.com/parallelno/Devector> | Existing C++ emulator — source of truth for extraction |
+| Devector core sources | <https://github.com/parallelno/Devector/tree/master/src/core> | C++ files to extract into `v6core` library |
+| Display spec (`display.h`) | <https://github.com/parallelno/Devector/blob/master/src/core/display.h> | Frame format, timing constants, scanline layout |
+| Test-output port (`io.cpp`) | <https://github.com/parallelno/Devector/blob/331dd83c/src/core/io.cpp#L287> | Port `0xED` definition for test harness output |
+| **v6_assembler** | <https://github.com/parallelno/v6_assembler> | Assembler whose ROMs this emulator validates |
+
+---
+
+## 1. C++ Project Layout
 
 ```
 v6emul/
-├── Cargo.toml              # workspace root
-├── Cargo.lock
-├── design.md               # design spec (existing)
-├── plan.md                 # this document
+├── CMakeLists.txt              # top-level CMake (workspace root)
+├── CMakePresets.json            # build presets (Debug, Release, CI)
+├── design.md                   # design spec (existing)
+├── plan.md                     # this document
 │
-├── crates/
-│   ├── v6core/             # emulator core library
-│   │   ├── Cargo.toml
+├── libs/
+│   ├── v6core/                 # emulator core static library
+│   │   ├── CMakeLists.txt
+│   │   ├── include/
+│   │   │   └── v6core/
+│   │   │       ├── cpu.h           # Intel 8080 CPU emulation
+│   │   │       ├── memory.h        # 64K RAM + 8×256K RAM Disks
+│   │   │       ├── memory_consts.h # memory layout constants
+│   │   │       ├── io.h            # I/O port subsystem (8255 PPI, timers, palette)
+│   │   │       ├── display.h       # scanline rasterizer (768×312 framebuffer)
+│   │   │       ├── timer_i8253.h   # i8253 programmable interval timer (3 counters)
+│   │   │       ├── sound_ay8910.h  # AY-3-8910 sound chip
+│   │   │       ├── fdc1793.h       # WD1793 floppy disk controller
+│   │   │       ├── fdd_consts.h    # floppy-disk geometry constants
+│   │   │       ├── keyboard.h      # keyboard matrix scanning
+│   │   │       ├── audio.h         # audio mixing / downsampling (1.5MHz → 50kHz)
+│   │   │       ├── hardware.h      # orchestrator: emulation loop, timing, debug interface
+│   │   │       ├── hardware_consts.h # timing constants (clocks, frame geometry)
+│   │   │       ├── breakpoint.h    # single breakpoint definition (addr, conditions, page filter)
+│   │   │       ├── breakpoints.h   # breakpoint collection manager
+│   │   │       ├── watchpoint.h    # single memory watchpoint definition
+│   │   │       ├── watchpoints.h   # watchpoint collection manager
+│   │   │       └── types.h         # shared type aliases (Addr, GlobalAddr, etc.)
 │   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── cpu.rs          # Intel 8080 CPU emulation
-│   │       ├── memory.rs       # 64K RAM + 8×256K RAM Disks
-│   │       ├── io.rs           # I/O port subsystem (8255 PPI, timers, palette)
-│   │       ├── display.rs      # scanline rasterizer (768×312 framebuffer)
-│   │       ├── timer_i8253.rs  # i8253 programmable interval timer (3 counters)
-│   │       ├── sound_ay8910.rs # AY-3-8910 sound chip
-│   │       ├── fdc1793.rs      # WD1793 floppy disk controller
-│   │       ├── keyboard.rs     # keyboard matrix scanning
-│   │       ├── audio.rs        # audio mixing / downsampling (1.5MHz → 50kHz)
-│   │       ├── hardware.rs     # orchestrator: emulation loop, timing, debug interface
-│   │       └── breakpoint.rs   # breakpoint management (addr, conditions, page filter)
+│   │       ├── cpu.cpp
+│   │       ├── memory.cpp
+│   │       ├── io.cpp
+│   │       ├── display.cpp
+│   │       ├── timer_i8253.cpp
+│   │       ├── sound_ay8910.cpp
+│   │       ├── fdc1793.cpp
+│   │       ├── keyboard.cpp
+│   │       ├── audio.cpp
+│   │       ├── hardware.cpp
+│   │       ├── breakpoint.cpp
+│   │       ├── breakpoints.cpp
+│   │       ├── watchpoint.cpp
+│   │       └── watchpoints.cpp
 │   │
-│   ├── v6ipc/              # IPC protocol and transport
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── protocol.rs     # message types, serialization (MessagePack)
-│   │       ├── transport.rs    # shared-memory ring buffer + Unix/Named-pipe signaling
-│   │       └── commands.rs     # typed command/response enums
-│   │
-│   └── v6cli/              # CLI binary
-│       ├── Cargo.toml
+│   └── v6ipc/                  # IPC protocol and transport static library
+│       ├── CMakeLists.txt
+│       ├── include/
+│       │   └── v6ipc/
+│       │       ├── protocol.h      # message types, serialization (MessagePack)
+│       │       ├── transport.h     # shared-memory ring buffer + named-pipe signaling
+│       │       └── commands.h      # typed command/response enums
 │       └── src/
-│           └── main.rs         # argument parsing, ROM loading, IPC server, test-output
+│           ├── protocol.cpp
+│           ├── transport.cpp
+│           └── commands.cpp
+│
+├── app/                        # CLI binary
+│   ├── CMakeLists.txt
+│   └── main.cpp                # argument parsing, ROM loading, IPC server, test-output
 │
 └── tests/
-    ├── cpu_tests.rs            # instruction-level unit tests
-    ├── determinism_tests.rs    # replay / determinism verification
-    ├── integration_tests.rs    # full ROM execution tests
-    └── golden/                 # golden-file test fixtures (ROM + expected stdout)
+    ├── CMakeLists.txt
+    ├── cpu_tests.cpp               # instruction-level unit tests
+    ├── memory_tests.cpp            # memory mapping unit tests
+    ├── determinism_tests.cpp       # replay / determinism verification
+    ├── integration_tests.cpp       # full ROM execution tests
+    ├── ipc_tests.cpp               # IPC round-trip tests
+    └── golden/                     # golden-file test fixtures (ROM + expected stdout)
 ```
 
 ### Rationale
 
-| Crate | Role | Why separate? |
-|-------|------|---------------|
-| **v6core** | Pure emulator engine | Reusable by any frontend (ImGui, VS Code, tests) without pulling in I/O or CLI deps. No `std::thread`, no network code. |
+| Library | Role | Why separate? |
+|---------|------|---------------|
+| **v6core** | Pure emulator engine | Reusable by any frontend (ImGui, VS Code, tests) without pulling in IPC or CLI deps. No networking code. |
 | **v6ipc** | Transport + protocol | Isolates serialization format and transport choice; frontends only depend on this + v6core. |
-| **v6cli** | Binary entry point | Thin wrapper: parses args, wires IPC transport to v6core, handles test-output mode. |
+| **app** (v6emul) | Binary entry point | Thin wrapper: parses args, wires IPC transport to v6core, handles test-output mode. |
+
+### Build System
+
+- **CMake 3.21+** with presets for Debug/Release/CI.
+- C++20 standard (for `std::format`, `std::bit_width`, designated initializers).
+- Libraries built as `STATIC` by default; `SHARED` option for embedding use cases.
+- Testing via **Google Test** (fetched via `FetchContent`).
+- Single `cmake --build` produces `v6emul` binary + test runner.
 
 ---
 
@@ -60,42 +108,42 @@ v6emul/
 
 ### 2.1 Emulation Loop
 
-The inner loop mirrors the C++ `Hardware::ExecuteInstruction()` cycle-accurate model:
+The inner loop mirrors the existing [`Hardware::ExecuteInstruction()`](https://github.com/parallelno/Devector/tree/master/src/core) cycle-accurate model:
 
-```
-loop {
+```cpp
+while (running) {
     // Per machine cycle (4 T-states @ 3 MHz = 1.333 µs):
-    display.rasterize();             // 4 pixels @ 12 MHz
-    cpu.execute_machine_cycle();     // advance 1 machine cycle
-    audio.clock(2);                  // 2 ticks @ 1.5 MHz
+    display.Rasterize();             // 4 pixels @ 12 MHz
+    cpu.ExecuteMachineCycle(irq);    // advance 1 machine cycle
+    audio.Clock(2);                  // 2 ticks @ 1.5 MHz
 
-    io.try_commit(color_idx);        // deferred port commits
+    io.TryCommit(colorIdx);          // deferred port commits
 
-    if cpu.instruction_complete() {
-        check_breakpoints();
-        check_hlt_stop();            // --halt-exit mode
-        handle_test_port_output();   // port 0xED capture
+    if (cpu.IsInstructionExecuted()) {
+        CheckBreakpoints();
+        CheckHltStop();              // --halt-exit mode
+        HandleTestPortOutput();      // port 0xED capture
     }
 
-    if display.frame_complete() {
-        publish_frame();             // push to IPC ring buffer
-        handle_pending_commands();   // process pause/step/reset
-        throttle_to_50fps();         // sleep if real-time mode
+    if (display.IsFrameComplete()) {
+        PublishFrame();              // push to IPC ring buffer
+        HandlePendingCommands();     // process pause/step/reset
+        ThrottleTo50Fps();           // sleep if real-time mode
     }
 }
 ```
 
-### 2.2 Timing Constants (from C++ source)
+### 2.2 Timing Constants (from [Devector C++ source](https://github.com/parallelno/Devector/tree/master/src/core))
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
-| CPU clock | 3 MHz | hardware_consts.h |
-| Display clock | 12 MHz (4× CPU) | display.h |
-| Audio clock | 1.5 MHz (÷2 CPU) | audio.h |
-| Cycles per frame | 59,904 (312 lines × 192 cycles) | display.h |
-| Frame rate | 50.05 FPS (3 MHz ÷ 59,904) | display.h |
-| VSYNC period | 19,968 µs | display.h |
-| Scanline | 192 CPU cycles = 768 pixels | display.h |
+| CPU clock | 3 MHz | [`hardware_consts.h`](https://github.com/parallelno/Devector/blob/master/src/core/hardware_consts.h) |
+| Display clock | 12 MHz (4× CPU) | [`display.h`](https://github.com/parallelno/Devector/blob/master/src/core/display.h) |
+| Audio clock | 1.5 MHz (÷2 CPU) | [`audio.h`](https://github.com/parallelno/Devector/blob/master/src/core/audio.h) |
+| Cycles per frame | 59,904 (312 lines × 192 cycles) | [`display.h`](https://github.com/parallelno/Devector/blob/master/src/core/display.h) |
+| Frame rate | 50.05 FPS (3 MHz ÷ 59,904) | [`display.h`](https://github.com/parallelno/Devector/blob/master/src/core/display.h) |
+| VSYNC period | 19,968 µs | [`display.h`](https://github.com/parallelno/Devector/blob/master/src/core/display.h) |
+| Scanline | 192 CPU cycles = 768 pixels | [`display.h`](https://github.com/parallelno/Devector/blob/master/src/core/display.h) |
 
 ### 2.3 Execution Modes
 
@@ -114,11 +162,11 @@ loop {
 ```
 ┌───────────────────────────────────┐
 │         Emulation Thread          │ ← owns all mutable core state
-│  (v6core::Hardware::run())        │    single-threaded, no Arc/Mutex on hot path
+│  (Hardware::Run())                │    single-threaded, no shared mutexes on hot path
 │  loops: cpu + display + audio     │
-│  checks command channel each frame│
+│  checks command queue each frame  │
 └──────────┬────────────────────────┘
-           │ crossbeam channel (commands↓, events↑)
+           │ lock-free queue (commands↓, events↑)
            │ shared-memory ring buffer (frames↑)
 ┌──────────┴────────────────────────┐
 │          IPC Thread               │ ← v6ipc transport
@@ -127,7 +175,7 @@ loop {
 └───────────────────────────────────┘
 ```
 
-The emulation thread is the **sole owner** of core state — no interior mutability or locking on the hot path. Communication with the IPC thread uses lock-free channels (`crossbeam-channel`) for commands/events and a shared-memory ring buffer for frames.
+The emulation thread is the **sole owner** of core state — no shared locks on the hot path. Communication with the IPC thread uses a lock-free SPSC queue (e.g., `moodycamel::ReaderWriterQueue`) for commands/events and a shared-memory ring buffer for frames.
 
 ---
 
@@ -153,7 +201,7 @@ The emulation thread is the **sole owner** of core state — no interior mutabil
 - **Frame math**: 768 × 312 × 3 bytes (RGB24) = **719,424 bytes/frame** × 50.05 fps ≈ **~36 MB/s**.
   TCP loopback can handle this, but shared memory eliminates the kernel copy entirely — critical for sustaining 50 Hz without jitter. The frame is written once into the ring buffer; the consumer reads it directly.
 
-- **Cross-platform**: `shared_memory` crate wraps `mmap`/`CreateFileMapping`. Signaling via `interprocess` crate (named pipe on Windows, UDS on Unix).
+- **Cross-platform**: Shared memory via `mmap` (POSIX) / `CreateFileMapping` (Win32). Signaling via named pipe (Windows) or Unix domain socket (POSIX), abstracted behind a platform shim.
 
 - **Separation of concerns**: Large frame blits go through zero-copy shmem; small control messages (pause/step/registers) go through the named pipe with MessagePack encoding. This avoids head-of-line blocking.
 
@@ -163,15 +211,15 @@ The emulation thread is the **sole owner** of core state — no interior mutabil
 Shared Memory Region (e.g., 4 MB):
 ┌──────────────────────────────────────────┐
 │ Header (64 bytes, cache-line aligned)    │
-│   write_idx: AtomicU64                   │
-│   read_idx:  AtomicU64                   │
-│   frame_size: u32                        │
-│   slot_count: u32 (e.g., 4 triple-buffer)│
+│   write_idx: std::atomic<uint64_t>       │
+│   read_idx:  std::atomic<uint64_t>       │
+│   frame_size: uint32_t                   │
+│   slot_count: uint32_t (e.g., 4 slots)  │
 ├──────────────────────────────────────────┤
-│ Slot 0: [u8; 719_424]  (frame 0)        │
-│ Slot 1: [u8; 719_424]  (frame 1)        │
-│ Slot 2: [u8; 719_424]  (frame 2)        │
-│ Slot 3: [u8; 719_424]  (frame 3)        │
+│ Slot 0: uint8_t[719'424]  (frame 0)     │
+│ Slot 1: uint8_t[719'424]  (frame 1)     │
+│ Slot 2: uint8_t[719'424]  (frame 2)     │
+│ Slot 3: uint8_t[719'424]  (frame 3)     │
 └──────────────────────────────────────────┘
 
 Named Pipe / UDS (bidirectional):
@@ -191,93 +239,94 @@ If shared memory is unavailable (e.g., sandboxed VS Code remote), fall back to *
 ### 4.1 Encoding: MessagePack
 
 - Compact binary format (~30% smaller than JSON).
-- Zero-alloc deserialization via `rmp-serde`.
-- Mature Rust ecosystem.
-- Easily consumed from TypeScript (`@msgpack/msgpack`) and C++ (`msgpack-c`).
+- Zero-copy deserialization via `msgpack-c` (`msgpack::unpacked`).
+- Mature C++ library with header-only option.
+- Easily consumed from TypeScript (`@msgpack/msgpack`) and other languages.
 
 ### 4.2 Message Shape
 
 Every message is a length-prefixed MessagePack blob:
 
 ```
-[ u32 length ][ MessagePack payload ]
+[ uint32_t length ][ MessagePack payload ]
 ```
 
 ### 4.3 Command Messages (Client → Emulator)
 
-```rust
-#[derive(Serialize, Deserialize)]
-pub enum Command {
+```cpp
+enum class CommandType : uint8_t {
     // Execution control
-    Run,
-    Pause,
-    Step,                           // single instruction
-    StepOver,                       // step over CALL
-    StepFrame,                      // run one frame
-    Reset,
-    SetSpeed(ExecSpeed),
+    Run, Pause, Step, StepOver, StepFrame, Reset, SetSpeed,
 
     // Memory / ROM
-    LoadRom { addr: u16, data: Vec<u8> },
-    ReadMemory { addr: u16, len: u16 },
-    WriteMemory { addr: u16, data: Vec<u8> },
+    LoadRom, ReadMemory, WriteMemory,
 
     // Registers
-    GetRegisters,
-    SetRegisters(CpuRegisters),
+    GetRegisters, SetRegisters,
 
     // Breakpoints
-    AddBreakpoint(Breakpoint),
-    RemoveBreakpoint { id: u32 },
-    ListBreakpoints,
-    EnableBreakpoint { id: u32, enabled: bool },
+    AddBreakpoint, RemoveBreakpoint, ListBreakpoints, EnableBreakpoint,
 
     // Display
-    RequestFrame,                   // one-shot frame request
-    SubscribeFrames { enabled: bool }, // continuous 50 Hz streaming
+    RequestFrame, SubscribeFrames,
 
     // I/O
     GetPortState,
 
     // Script / eval
-    RunScript(String),
+    RunScript,
 
     // Lifecycle
-    Ping,
-    Shutdown,
-}
+    Ping, Shutdown,
+};
+
+struct Command {
+    CommandType type;
+    // Payload varies by type; deserialized from MessagePack map.
+    // Examples:
+    //   LoadRom:        { "addr": uint16_t, "data": bin }
+    //   ReadMemory:     { "addr": uint16_t, "len": uint16_t }
+    //   SetSpeed:       { "speed": uint8_t }  // percentage or 0xFF=max
+    //   AddBreakpoint:  { "addr": uint16_t, "condition": uint8_t, "page": int8_t }
+    //   SubscribeFrames:{ "enabled": bool }
+    MSGPACK_DEFINE(type, /* payload fields */);
+};
 ```
 
 ### 4.4 Event Messages (Emulator → Client)
 
-```rust
-#[derive(Serialize, Deserialize)]
-pub enum Event {
+```cpp
+enum class EventType : uint8_t {
     // Execution state
-    StateChanged(ExecState),        // Running, Paused, Halted
-    BreakpointHit { id: u32, addr: u16 },
-    StepComplete,
+    StateChanged, BreakpointHit, StepComplete,
 
     // Data responses
-    Registers(CpuRegisters),
-    MemoryData { addr: u16, data: Vec<u8> },
-    PortState(IoPortState),
-    BreakpointList(Vec<Breakpoint>),
+    Registers, MemoryData, PortState, BreakpointList,
 
-    // Frame (only via named pipe fallback; normally via shmem)
-    Frame { seq: u64, data: Vec<u8> },
-    FrameReady { seq: u64 },       // notification; data is in shmem
+    // Frame
+    Frame,          // via named pipe fallback; normally via shmem
+    FrameReady,     // notification; data is in shmem
 
     // Test output
-    TestOutput { port: u8, value: u8 },
+    TestOutput,
 
     // Script result
-    ScriptResult(String),
+    ScriptResult,
 
     // Lifecycle
-    Pong,
-    Error { code: u32, message: String },
-}
+    Pong, Error,
+};
+
+struct Event {
+    EventType type;
+    // Payload varies by type; serialized to MessagePack map.
+    // Examples:
+    //   Registers:      { "pc": u16, "sp": u16, "a": u8, ... "cc": u64 }
+    //   FrameReady:     { "seq": uint64_t }
+    //   BreakpointHit:  { "id": u32, "addr": u16 }
+    //   Error:          { "code": u32, "message": string }
+    MSGPACK_DEFINE(type, /* payload fields */);
+};
 ```
 
 ### 4.5 Frame Streaming Protocol (via Shared Memory)
@@ -296,7 +345,8 @@ If the client falls behind, the emulator can skip frames (overwrite oldest unrea
 
 ### 5.1 Unit Tests — CPU Instructions
 
-**Location**: `crates/v6core/src/cpu.rs` (inline `#[cfg(test)]`) + `tests/cpu_tests.rs`
+**Framework**: Google Test (via CMake `FetchContent`).
+**Location**: `tests/cpu_tests.cpp`
 
 | Category | Approach |
 |----------|----------|
@@ -304,7 +354,7 @@ If the client falls behind, the emulator can skip frames (overwrite oldest unrea
 | **Flag behavior** | Dedicated tests for carry, zero, sign, parity, aux-carry across arithmetic/logic ops. |
 | **Interrupt handling** | Test EI/DI/RST sequences, verify interrupt vector dispatch. |
 | **HLT** | Verify CPU halts and can be resumed by interrupt. |
-| **Undocumented behavior** | Port known quirks from C++ (e.g., DAA edge cases). |
+| **Undocumented behavior** | Preserve known quirks from Devector (e.g., DAA edge cases). |
 
 **Data source**: Use the well-known i8080 test suite (8080EX1.COM / 8080PRE.COM) as integration ROM tests, and hand-craft unit tests for individual instructions.
 
@@ -318,6 +368,8 @@ If the client falls behind, the emulator can skip frames (overwrite oldest unrea
 | **Timer i8253** | Counter modes (0–5); read-back; underflow interrupt generation. |
 | **AY-3-8910** | Register read/write; tone period → frequency; envelope shapes. |
 | **FDC1793** | Command parsing; sector read/write with mock disk image; status register bits. |
+| **Breakpoints** | Add/remove/enable/disable; collection lookup by address; page filtering. |
+| **Watchpoints** | Add/remove/enable/disable; memory-range hit detection; read/write mode filtering. |
 
 ### 5.3 Determinism Tests
 
@@ -331,7 +383,7 @@ Run the same ROM with identical initial state twice; assert byte-identical frame
 
 ### 5.5 Golden Tests (Test-Port Output)
 
-**Purpose**: Validate the `v6asm` test harness flow.
+**Purpose**: Validate the [`v6asm`](https://github.com/parallelno/v6_assembler) test harness flow.
 
 1. Assemble a small test ROM that performs `OUT 0xED, <value>` for each test assertion.
 2. Run the emulator in `--halt-exit` mode.
@@ -349,7 +401,7 @@ HALT at PC=0x1234 after 12345 cpu_cycles
 
 ### 5.6 IPC Tests
 
-- Round-trip: send `Command::Ping`, assert `Event::Pong`.
+- Round-trip: send `Ping` command, assert `Pong` event.
 - Frame subscription: subscribe, run 3 frames, assert 3 `FrameReady` notifications.
 - Breakpoint: set breakpoint, run ROM, assert `BreakpointHit`.
 - Memory read/write round-trip.
@@ -360,25 +412,25 @@ HALT at PC=0x1234 after 12345 cpu_cycles
 
 ### 6.1 Zero-Copy Frame Path
 
-- The display rasterizer writes directly into a `Box<[u8; FRAME_LEN * 3]>` (RGB24).
+- The display rasterizer writes directly into a pre-allocated `std::array<uint8_t, FRAME_LEN * 3>` (RGB24).
 - On frame completion, triple-buffer swap: `front ↔ back ↔ render`. No allocation.
 - For IPC: the render buffer is `memcpy`'d into the shared-memory slot (one copy, ~0.7 ms for 700 KB at memory bandwidth). Alternative: rasterize directly into shmem if the consumer is fast enough.
 
 ### 6.2 Avoiding Allocations in the Hot Loop
 
 - All per-instruction/per-cycle work uses stack-allocated or pre-allocated buffers.
-- No `Vec` growth, no `Box::new`, no `String` formatting on the hot path.
-- Breakpoint checking uses a pre-sorted `Vec<Breakpoint>` with binary search on PC, not a `HashMap`.
+- No `std::vector` growth, no `new`, no `std::string` formatting on the hot path.
+- Breakpoint checking uses a pre-sorted `std::vector<Breakpoint>` with `std::lower_bound` on PC, not a `std::unordered_map`.
 
 ### 6.3 CPU Dispatch
 
-- The 256-opcode dispatch table is a `[fn(&mut Cpu); 256]` array (direct function pointer lookup — one indirect call, no branching). This mirrors the C++ `switch` but avoids branch predictor pressure on large switch statements.
-- Each instruction handler is `#[inline(never)]` to keep the dispatch loop's instruction cache footprint small.
+- The existing Devector design uses a large `switch` statement in `Decode()` for 256-opcode dispatch. This is retained as-is — modern compilers (GCC/Clang/MSVC) generate efficient jump tables from dense switch statements.
+- Each instruction handler is cycle-accurate with per-machine-cycle `switch(MC)` decomposition, matching the existing Devector architecture.
 
 ### 6.4 Display Rasterizer
 
-- Pre-bake the full 256-entry `vector_color → RGB` palette at init time (as in C++).
-- Use `unsafe` for unchecked frame buffer indexing in the hot rasterize path (after validating bounds at frame start). Bounds checks in the inner pixel loop are estimated to cost ~5% based on similar emulator projects; benchmark after porting to confirm.
+- Pre-bake the full 256-entry `vector_color → RGB` palette at init time (as in Devector).
+- The existing rasterizer design is retained; the inner pixel loop operates directly on the frame buffer array with computed offsets.
 - Batch 16 pixels (4 CPU cycles) per rasterize call to amortize function-call overhead.
 
 ### 6.5 Audio Buffering
@@ -394,62 +446,80 @@ HALT at PC=0x1234 after 12345 cpu_cycles
 
 ---
 
-## 7. Migration Strategy from C++
+## 7. Extraction Strategy from [Devector](https://github.com/parallelno/Devector)
 
 ### 7.1 Component Mapping
 
-| C++ Component | Rust Module | Notes |
-|---------------|-------------|-------|
-| `cpu_i8080.h/cpp` | `v6core::cpu` | 1:1 port; struct-of-arrays register layout. Port all 256 instruction handlers. |
-| `memory.h/cpp` + `memory_consts.h` | `v6core::memory` | Port RAM Disk mapping logic. Replace raw pointers with `[u8; 65536]` + `[[u8; 262144]; 8]`. |
-| `io.h/cpp` | `v6core::io` | Port commit timers. Replace C macros with struct field access. |
-| `display.h/cpp` | `v6core::display` | Port scanline rasterizer. Replace `std::array<ColorI, N>` with `Box<[u8; N*3]>` (RGB24). |
-| `timer_i8253.h` | `v6core::timer_i8253` | Direct port of 3-counter timer. |
-| `sound_ay8910.h` | `v6core::sound_ay8910` | Direct port of AY chip register model + tone/noise/envelope. |
-| `fdc_wd1793.h/cpp` | `v6core::fdc1793` | Port FDC state machine. Replace raw disk buffer pointers with `Vec<u8>`. |
-| `keyboard.h/cpp` | `v6core::keyboard` | Port matrix scanning. Simplify (no SDL keycodes — accept abstract key events). |
-| `audio.h/cpp` | `v6core::audio` | Port downsampler. Remove SDL dependency (output raw samples to ring buffer). |
-| `hardware.h/cpp` + `hardware_consts.h` | `v6core::hardware` | Port execution loop. Replace `std::thread` + `std::mutex` with Rust channels. Replace C++ request enum with Rust `Command` enum. |
-| `breakpoint.h/cpp` | `v6core::breakpoint` | Direct port. Replace `std::vector` with `Vec`. |
+All C++ source files below are from [`Devector/src/core/`](https://github.com/parallelno/Devector/tree/master/src/core).
 
-### 7.2 Incremental Validation Strategy
+| Devector Source | v6core Target | Extraction Notes |
+|-----------------|---------------|------------------|
+| `cpu_i8080.h/cpp` | `cpu.h/cpp` | Direct copy. Remove `#include "utils/utils.h"` dependency; inline needed helpers. |
+| `memory.h/cpp` + `memory_consts.h` | `memory.h/cpp` + `memory_consts.h` | Remove file I/O (ROM/RamDisk persistence) — move to CLI layer. Remove `utils/utils.h` dependency. |
+| `io.h/cpp` | `io.h/cpp` | Remove GUI-related debug state if present. Keep commit timer logic intact. |
+| `display.h/cpp` | `display.h/cpp` | Remove ImGui/OpenGL rendering. Keep scanline rasterizer, output raw RGB24 buffer. |
+| `timer_i8253.h/cpp` | `timer_i8253.h/cpp` | Direct copy. |
+| `sound_ay8910.h/cpp` | `sound_ay8910.h/cpp` | Direct copy. |
+| `fdc_wd1793.h/cpp` + `fdd_consts.h` | `fdc1793.h/cpp` + `fdd_consts.h` | Direct copy. Abstract disk image source (file path → `std::vector<uint8_t>` buffer). Keep `fdd_consts.h` for disk geometry constants. |
+| `keyboard.h/cpp` | `keyboard.h/cpp` | Remove SDL keycodes. Accept abstract key events (row/column matrix). |
+| `audio.h/cpp` | `audio.h/cpp` | Remove SDL audio dependency. Output raw samples to ring buffer. |
+| `hardware.h/cpp` + `hardware_consts.h` | `hardware.h/cpp` + `hardware_consts.h` | Remove `std::thread`/`std::mutex` GUI-loop coupling. Expose `Run()`/`Step()` API. Replace internal request enums with IPC-compatible `Command` enum. Keep `hardware_consts.h` for timing constants. |
+| `breakpoint.h/cpp` | `breakpoint.h/cpp` | Direct copy. Single breakpoint definition and logic. |
+| `breakpoints.h/cpp` | `breakpoints.h/cpp` | Direct copy. Collection manager — add/remove/enable/list breakpoints. |
+| `watchpoint.h/cpp` | `watchpoint.h/cpp` | Direct copy. Single memory watchpoint definition and logic. |
+| `watchpoints.h/cpp` | `watchpoints.h/cpp` | Direct copy. Collection manager — add/remove/enable/list memory watchpoints. |
+| `utils/types.h` | `types.h` | Extract `Addr`, `GlobalAddr`, `ColorI` typedefs. Drop GUI-only types. |
 
-Port and validate components **bottom-up**, starting with leaf dependencies:
+### 7.2 Key Refactoring Steps
+
+1. **Remove GUI coupling**: Devector's `Hardware` class uses `std::thread` + `std::mutex` to synchronize with the ImGui render loop. Replace with a clean synchronous `Run()` method that the CLI/IPC layer calls.
+2. **Remove SDL dependency**: Audio output, keyboard input, and window management all go through SDL in Devector. Replace with abstract interfaces:
+   - Audio → write samples to `std::array` ring buffer (consumed by IPC).
+   - Keyboard → accept key matrix updates via `SetKey(row, col, pressed)`.
+   - Display → expose raw `uint8_t*` frame buffer pointer.
+3. **Remove file I/O from core**: Devector's `Memory` constructor loads ROM/RamDisk files. Move file I/O to the CLI layer; `Memory::Init()` accepts raw byte spans.
+4. **Remove `utils/utils.h` dependency**: Contains logging, file helpers, and GUI utilities. Inline the few needed helpers (`LoadFile`, logging) or replace with `<format>` / `<fstream>`.
+
+### 7.3 Incremental Validation Strategy
+
+Extract and validate components **bottom-up**, starting with leaf dependencies:
 
 ```
 Phase 1: Foundation (no dependencies)
-  ├── memory.rs     — unit tests for read/write/mapping
-  ├── cpu.rs        — depends on memory (trait-abstracted)
-  │                    validate with 8080 test suite ROMs
-  └── keyboard.rs   — trivial; unit tests only
+  ├── memory.h/cpp     — unit tests for read/write/mapping
+  ├── cpu.h/cpp        — depends on memory
+  │                       validate with 8080 test suite ROMs
+  └── keyboard.h/cpp   — trivial; unit tests only
 
 Phase 2: Peripherals
-  ├── timer_i8253.rs   — unit tests for counter modes
-  ├── sound_ay8910.rs  — unit tests for register R/W
-  ├── fdc1793.rs       — unit tests with mock disk
-  └── audio.rs         — unit tests for downsampling
+  ├── timer_i8253.h/cpp — unit tests for counter modes
+  ├── sound_ay8910.h/cpp — unit tests for register R/W
+  ├── fdc1793.h/cpp + fdd_consts.h — unit tests with mock disk
+  ├── audio.h/cpp      — unit tests for downsampling
+  ├── breakpoints.h/cpp — collection manager unit tests
+  └── watchpoint.h/cpp + watchpoints.h/cpp — unit tests for memory watchpoints
 
 Phase 3: I/O Orchestration
-  ├── io.rs         — depends on keyboard, memory, timer, ay, fdc
-  │                    integration tests: port IN/OUT sequences
-  └── display.rs    — depends on memory, io
-                       visual regression: render test patterns, compare hashes
+  ├── io.h/cpp         — depends on keyboard, memory, timer, ay, fdc
+  │                       integration tests: port IN/OUT sequences
+  └── display.h/cpp    — depends on memory, io
+                          visual regression: render test patterns, compare hashes
 
 Phase 4: Hardware Loop
-  └── hardware.rs   — full integration
-                       run 8080EX1.COM, verify test output
-                       run demo ROMs, verify frame hashes
+  └── hardware.h/cpp   — full integration
+                          run 8080EX1.COM, verify test output
+                          run demo ROMs, verify frame hashes
 
 Phase 5: IPC + CLI
-  ├── v6ipc         — protocol + transport tests
-  └── v6cli         — end-to-end: CLI → IPC → run ROM → capture output
+  ├── v6ipc            — protocol + transport tests
+  └── app/main.cpp     — end-to-end: CLI → IPC → run ROM → capture output
 ```
 
-### 7.3 Behavior Drift Mitigation
+### 7.4 Behavior Drift Mitigation
 
-1. **Cycle-count oracle**: Run the same instruction sequence in C++ Devector and Rust v6core; compare per-instruction cycle counts.
+1. **Cycle-count oracle**: Run the same instruction sequence in original [Devector](https://github.com/parallelno/Devector) and extracted v6core; compare per-instruction cycle counts.
 2. **Frame hash oracle**: Render the same ROM for N frames in both; compare SHA-256 of each frame.
-3. **Test-port oracle**: Run the same test ROM in both; compare `OUT 0xED` sequences.
+3. **Test-port oracle**: Run the same test ROM in both; compare [`OUT 0xED`](https://github.com/parallelno/Devector/blob/331dd83c/src/core/io.cpp#L287) sequences.
 
 These oracles can be automated as CI jobs once Phase 4 is complete.
 
@@ -457,18 +527,21 @@ These oracles can be automated as CI jobs once Phase 4 is complete.
 
 ## 8. Dependency Summary
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `clap` | 4.x | CLI argument parsing |
-| `rmp-serde` | 1.x | MessagePack serialization |
-| `serde` | 1.x | Serialization framework |
-| `shared_memory` | 0.12+ | Cross-platform shared memory |
-| `interprocess` | 2.x | Named pipes / UDS |
-| `crossbeam-channel` | 0.5 | Lock-free MPSC channels |
-| `log` + `env_logger` | 0.4 / 0.10 | Logging |
-| `criterion` | 0.5 | Benchmarking |
+| Library | Source | Purpose |
+|---------|--------|---------|
+| `msgpack-c` | vcpkg / FetchContent | MessagePack serialization |
+| `CLI11` | FetchContent | CLI argument parsing |
+| `GoogleTest` | FetchContent | Unit / integration testing |
+| `Google Benchmark` | FetchContent | Performance benchmarking |
+| `spdlog` | vcpkg / FetchContent | Logging |
+| `moodycamel::ReaderWriterQueue` | header-only / FetchContent | Lock-free SPSC queue |
 
-No async runtime (tokio/async-std) — the emulation loop is synchronous and latency-sensitive. IPC threads use blocking I/O.
+Platform APIs used directly (no wrapper library):
+- **Shared memory**: `mmap`/`munmap` (POSIX), `CreateFileMapping`/`MapViewOfFile` (Win32).
+- **Named pipes**: `mkfifo` / Unix domain sockets (POSIX), `CreateNamedPipe` (Win32).
+- **Threads**: `std::thread` + `std::atomic` (C++20 standard library).
+
+No external GUI, async, or networking frameworks — the emulation loop is synchronous and latency-sensitive. IPC threads use blocking I/O.
 
 ---
 
@@ -502,45 +575,47 @@ TEST_OUT port=0xED value=0x00
 HALT at PC=0x0105 after 847231 cpu_cycles
 ```
 
-This is consumed by test runners (e.g., `v6asm` integration tests) for deterministic assertion.
+This is consumed by test runners (e.g., [`v6asm`](https://github.com/parallelno/v6_assembler) integration tests) for deterministic assertion.
 
 ---
 
 ## 10. Implementation Order (Milestones)
 
 ### Milestone 1 — CPU + Memory (foundation)
-- [ ] Workspace scaffolding (`Cargo.toml`, crate structure)
-- [ ] `memory.rs`: 64K RAM + RAM Disk mapping + unit tests
-- [ ] `cpu.rs`: full i8080 instruction set + cycle counting + unit tests
+- [ ] Project scaffolding (`CMakeLists.txt`, directory structure, presets)
+- [ ] Extract `memory.h/cpp`: decouple from file I/O + unit tests
+- [ ] Extract `cpu.h/cpp`: decouple from `utils/` + unit tests
 - [ ] Run 8080PRE.COM / 8080EX1.COM test ROMs to validate CPU
 
 ### Milestone 2 — Peripherals
-- [ ] `keyboard.rs`: matrix scanning + unit tests
-- [ ] `timer_i8253.rs`: 3-counter timer + unit tests
-- [ ] `sound_ay8910.rs`: AY chip register model + unit tests
-- [ ] `fdc1793.rs`: FDC state machine + unit tests (mock disk)
-- [ ] `audio.rs`: downsampler + unit tests
+- [ ] Extract `keyboard.h/cpp`: remove SDL + unit tests
+- [ ] Extract `timer_i8253.h/cpp`: unit tests
+- [ ] Extract `sound_ay8910.h/cpp`: unit tests
+- [ ] Extract `fdc1793.h/cpp` + `fdd_consts.h`: unit tests (mock disk)
+- [ ] Extract `audio.h/cpp`: remove SDL + unit tests
+- [ ] Extract `breakpoints.h/cpp`: collection manager + unit tests
+- [ ] Extract `watchpoint.h/cpp` + `watchpoints.h/cpp`: unit tests
 
 ### Milestone 3 — I/O + Display
-- [ ] `io.rs`: port dispatch + commit timers + unit tests
-- [ ] `display.rs`: scanline rasterizer + frame buffer + unit tests
+- [ ] Extract `io.h/cpp`: port dispatch + commit timers + unit tests
+- [ ] Extract `display.h/cpp`: remove ImGui/GL, output raw RGB24 + unit tests
 - [ ] Integration test: render a test pattern ROM, verify frame hash
 
 ### Milestone 4 — Hardware Loop + Test Mode
-- [ ] `hardware.rs`: emulation loop, timing, execution modes
+- [ ] Extract `hardware.h/cpp`: decouple from GUI thread model, expose `Run()`/`Step()` API
 - [ ] `--halt-exit` mode + port 0xED test output to stdout
-- [ ] Golden tests: assemble test ROMs with v6asm, run, compare output
+- [ ] Golden tests: assemble test ROMs with [v6asm](https://github.com/parallelno/v6_assembler), run, compare output
 - [ ] Determinism test: run same ROM twice, assert identical output
 
 ### Milestone 5 — IPC
-- [ ] `v6ipc::protocol`: MessagePack message types
-- [ ] `v6ipc::transport`: shared-memory ring buffer + named pipe signaling
-- [ ] `v6ipc::commands`: typed request/response API
+- [ ] `v6ipc/protocol`: MessagePack message types
+- [ ] `v6ipc/transport`: shared-memory ring buffer + named pipe signaling
+- [ ] `v6ipc/commands`: typed request/response API
 - [ ] IPC integration tests (ping, frame subscribe, breakpoint)
 
 ### Milestone 6 — CLI + Polish
-- [ ] `v6cli::main`: clap argument parsing, ROM loading, IPC server wiring
+- [ ] `app/main.cpp`: CLI11 argument parsing, ROM loading, IPC server wiring
 - [ ] TCP fallback transport
 - [ ] End-to-end test: CLI → IPC → run ROM → capture frame
-- [ ] Benchmarking with `criterion` (instructions/sec, frames/sec)
+- [ ] Benchmarking with Google Benchmark (instructions/sec, frames/sec)
 - [ ] CI pipeline (build + test on Linux/macOS/Windows)
