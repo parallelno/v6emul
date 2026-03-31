@@ -1,0 +1,8 @@
+[package]
+name = "v6ipc"
+version = "0.1.0"
+edition = "2021"
+description = "Vector-06C emulator IPC protocol and transport"
+
+[dependencies]
+v6core = { path = "../v6core" }

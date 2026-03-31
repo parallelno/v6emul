@@ -1,0 +1,9 @@
+[package]
+name = "v6cli"
+version = "0.1.0"
+edition = "2021"
+description = "Vector-06C emulator CLI binary"
+
+[dependencies]
+v6core = { path = "../v6core" }
+v6ipc = { path = "../v6ipc" }
