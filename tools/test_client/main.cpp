@@ -9,14 +9,19 @@
 #include <WS2tcpip.h>
 #include <Windows.h>
 #include <shellapi.h>
+#include <timeapi.h>
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "winmm.lib")
 
 #include <cstdint>
 #include <cstring>
 #include <vector>
 #include <string>
 #include <format>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 #include <nlohmann/json.hpp>
 #include "ipc/protocol.h"
@@ -37,21 +42,29 @@ static constexpr int FRAME_BYTES = FRAME_PIXELS * 4;
 // Scale factor for the window (768×312 is quite wide and short)
 static constexpr int SCALE = 2;
 
-// Timer ID for the 50fps poll
+// Timer ID for repaint
 static constexpr UINT_PTR TIMER_ID = 1;
-static constexpr UINT TIMER_MS = 20; // 50 fps
+static constexpr UINT TIMER_MS = 15;
 
 // ── Globals ───────────────────────────────────────────────────────────
 static SOCKET g_sock = INVALID_SOCKET;
-static std::vector<uint32_t> g_frameBuf(FRAME_PIXELS, 0);
-static bool g_connected = false;
 static uint16_t g_port = 9876;
 static BitmapInfoBF g_bmi{};
-static int g_fps = 0;
-static int g_frameCount = 0;
-static DWORD g_lastFpsTick = 0;
-// Pre-encoded request bytes (built once, reused every frame)
 static std::vector<uint8_t> g_requestBytes;
+
+// Double-buffered frames: worker writes to back, UI reads from front
+static std::vector<uint32_t> g_frameFront(FRAME_PIXELS, 0);
+static std::vector<uint32_t> g_frameBack(FRAME_PIXELS, 0);
+static std::mutex g_frameMutex;
+static std::atomic<bool> g_frameReady{false};
+
+// Stats
+static std::atomic<int> g_recvCount{0};
+static std::atomic<bool> g_connected{false};
+
+// Worker thread control
+static std::atomic<bool> g_running{true};
+static HWND g_hwnd = nullptr;
 
 // ── Socket helpers ────────────────────────────────────────────────────
 static bool RecvExact(void* buf, size_t len)
@@ -90,10 +103,14 @@ static bool ConnectToServer()
 	g_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (g_sock == INVALID_SOCKET) return false;
 
-	// Disable Nagle
 	BOOL nodelay = TRUE;
 	setsockopt(g_sock, IPPROTO_TCP, TCP_NODELAY,
 		reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+
+	// Increase receive buffer to hold several frames
+	int rcvBuf = 4 * 1024 * 1024;
+	setsockopt(g_sock, SOL_SOCKET, SO_RCVBUF,
+		reinterpret_cast<const char*>(&rcvBuf), sizeof(rcvBuf));
 
 	sockaddr_in addr{};
 	addr.sin_family = AF_INET;
@@ -106,7 +123,7 @@ static bool ConnectToServer()
 		return false;
 	}
 
-	g_connected = true;
+	g_connected.store(true);
 	return true;
 }
 
@@ -116,72 +133,84 @@ static void Disconnect()
 		closesocket(g_sock);
 		g_sock = INVALID_SOCKET;
 	}
-	g_connected = false;
+	g_connected.store(false);
 }
 
-// ── Fetch one frame from the emulator (raw binary protocol) ──────────
-// Wire format: [4:payloadLen][4:width][4:height][raw ABGR pixels]
-// Receives directly into g_frameBuf — zero intermediate allocations.
-static bool FetchFrame()
+// ── Worker thread: fetch frames as fast as possible ───────────────────
+static void WorkerThread()
 {
-	if (!g_connected) {
-		if (!ConnectToServer()) return false;
+	while (g_running.load()) {
+		if (!g_connected.load()) {
+			if (!ConnectToServer()) {
+				Sleep(500);
+				continue;
+			}
+		}
+
+		// Send request
+		if (!SendExact(g_requestBytes.data(), g_requestBytes.size())) {
+			Disconnect();
+			continue;
+		}
+
+		// Read header: [4:payloadLen][4:width][4:height]
+		uint32_t payloadLen = 0;
+		if (!RecvExact(&payloadLen, 4)) { Disconnect(); continue; }
+		if (payloadLen < 8 || payloadLen > 64 * 1024 * 1024) { Disconnect(); continue; }
+
+		uint32_t width = 0, height = 0;
+		if (!RecvExact(&width, 4)) { Disconnect(); continue; }
+		if (!RecvExact(&height, 4)) { Disconnect(); continue; }
+
+		size_t pixelBytes = payloadLen - 8;
+		if (width != FRAME_W || height != FRAME_H || pixelBytes != FRAME_BYTES) {
+			Disconnect();
+			continue;
+		}
+
+		// Receive directly into back buffer
+		if (!RecvExact(g_frameBack.data(), pixelBytes)) { Disconnect(); continue; }
+
+		// Swap to front under lock
+		{
+			std::lock_guard lock(g_frameMutex);
+			g_frameFront.swap(g_frameBack);
+		}
+		g_frameReady.store(true);
+		g_recvCount.fetch_add(1);
 	}
-
-	// Send pre-encoded request
-	if (!SendExact(g_requestBytes.data(), g_requestBytes.size())) {
-		Disconnect();
-		return false;
-	}
-
-	// Read raw response: [4:payloadLen][4:width][4:height][pixels]
-	uint32_t payloadLen = 0;
-	if (!RecvExact(&payloadLen, 4)) { Disconnect(); return false; }
-
-	if (payloadLen < 8 || payloadLen > 64 * 1024 * 1024) { Disconnect(); return false; }
-
-	uint32_t width = 0, height = 0;
-	if (!RecvExact(&width, 4)) { Disconnect(); return false; }
-	if (!RecvExact(&height, 4)) { Disconnect(); return false; }
-
-	size_t pixelBytes = payloadLen - 8;
-	if (width != FRAME_W || height != FRAME_H || pixelBytes != FRAME_BYTES) {
-		Disconnect();
-		return false;
-	}
-
-	// Receive pixel data directly into the display buffer
-	if (!RecvExact(g_frameBuf.data(), pixelBytes)) { Disconnect(); return false; }
-
-	return true;
 }
 
 // ── Window procedure ──────────────────────────────────────────────────
+static int g_fps = 0;
+static int g_frameCount = 0;
+static DWORD g_lastFpsTick = 0;
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
 	switch (msg)
 	{
 	case WM_CREATE:
+		timeBeginPeriod(1);
 		SetTimer(hwnd, TIMER_ID, TIMER_MS, nullptr);
 		g_lastFpsTick = GetTickCount();
 		return 0;
 
 	case WM_TIMER:
 		if (wParam == TIMER_ID) {
-			if (FetchFrame()) {
+			if (g_frameReady.exchange(false)) {
 				g_frameCount++;
 				InvalidateRect(hwnd, nullptr, FALSE);
 			}
-			// Update FPS counter every second
 			DWORD now = GetTickCount();
 			if (now - g_lastFpsTick >= 1000) {
-				g_fps = g_frameCount;
+				g_fps = g_recvCount.exchange(0);
 				g_frameCount = 0;
 				g_lastFpsTick = now;
 
 				auto title = std::format(L"v6emul test client  |  {}x{}  |  {} fps  |  {}",
 					FRAME_W, FRAME_H, g_fps,
-					g_connected ? L"connected" : L"disconnected");
+					g_connected.load() ? L"connected" : L"disconnected");
 				SetWindowTextW(hwnd, title.c_str());
 			}
 		}
@@ -197,13 +226,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		int clientW = rc.right - rc.left;
 		int clientH = rc.bottom - rc.top;
 
-		// DIB rows are bottom-up, so we use negative height to flip
-		SetStretchBltMode(hdc, COLORONCOLOR);
-		StretchDIBits(hdc,
-			0, 0, clientW, clientH,   // dest
-			0, 0, FRAME_W, FRAME_H,   // src
-			g_frameBuf.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmi),
-			DIB_RGB_COLORS, SRCCOPY);
+		{
+			std::lock_guard lock(g_frameMutex);
+			SetStretchBltMode(hdc, COLORONCOLOR);
+			StretchDIBits(hdc,
+				0, 0, clientW, clientH,
+				0, 0, FRAME_W, FRAME_H,
+				g_frameFront.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmi),
+				DIB_RGB_COLORS, SRCCOPY);
+		}
 
 		EndPaint(hwnd, &ps);
 		return 0;
@@ -217,6 +248,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 	case WM_DESTROY:
 		KillTimer(hwnd, TIMER_ID);
+		timeEndPeriod(1);
+		g_running.store(false);
 		Disconnect();
 		PostQuitMessage(0);
 		return 0;
@@ -290,6 +323,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 		return 1;
 	}
 
+	g_hwnd = hwnd;
+
+	// Start background frame fetch thread
+	std::thread worker(WorkerThread);
+
 	ShowWindow(hwnd, nCmdShow);
 	UpdateWindow(hwnd);
 
@@ -299,6 +337,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 		TranslateMessage(&msg);
 		DispatchMessageW(&msg);
 	}
+
+	// Shut down worker
+	g_running.store(false);
+	Disconnect(); // unblocks recv in worker
+	if (worker.joinable()) worker.join();
 
 	WSACleanup();
 	return static_cast<int>(msg.wParam);
