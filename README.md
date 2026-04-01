@@ -23,6 +23,8 @@ build/release/tools/test_client/Release/test_client.exe
 - [Architecture](docs/architecture.md)
 - [Building](docs/building.md)
 - [Test client](docs/test-client.md)
+- [Design document](docs/design.md)
+- [Implementation Plan](docs/plan.md)
 
 ## Project structure
 

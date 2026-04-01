@@ -11,6 +11,8 @@
 | [IPC Protocol](ipc-protocol.md) | Wire format, message framing, command reference |
 | [Architecture](architecture.md) | Thread model, library hierarchy, code structure |
 | [Test Client](test-client.md) | Win32 test client for frame display and debugging |
+| [Design document](design.md) | High-level design decisions and goals |
+| [Implementation plan](plan.md) | Development roadmap and task tracking |
 
 ## Quick Start
 
