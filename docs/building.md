@@ -8,6 +8,7 @@
   - GCC 11+ (Linux)
   - MinGW-w64 (Windows, alternative)
 - **Git** (for fetching dependencies)
+- **Python** 3.8+ (for ASM unit test runner)
 
 ## Dependencies
 
@@ -19,6 +20,10 @@ All dependencies are fetched automatically during CMake configuration:
 | LuaJIT | 2.1.0-beta3 | FetchContent + ExternalProject (static lib) |
 
 No manual dependency installation is required.
+
+### Python (test runner)
+
+The ASM unit test suite (`tests/run_unit_tests.py`) requires **Python 3.8+**. It uses only the standard library — no third-party packages are needed.
 
 ## Configure & Build
 
@@ -89,6 +94,29 @@ ctest --test-dir build/release --build-config Release
 | `golden_test_arith` | Golden-file test for arithmetic ROM |
 
 Golden tests run the emulator with `--halt-exit` on a test ROM and compare stdout output against expected files in `tests/golden/`.
+
+### ASM Unit Tests
+
+Run the assembly-level CPU instruction tests separately:
+```bash
+python tests/run_unit_tests.py
+```
+Show full emulator output per test
+```bash
+python tests/run_unit_tests.py --verbose
+```
+Recapture actual register values (for updating expected.json)
+```bash
+python tests/run_unit_tests.py --capture
+```
+
+Or via CTest:
+
+```bash
+ctest --test-dir build/release --build-config Release -R asm_unit_tests
+```
+
+See [PLAN_unit_test_suite_2026-03-31.md](../PLAN_unit_test_suite_2026-03-31.md) for the full test suite design.
 
 ## Project Structure
 
