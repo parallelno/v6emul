@@ -96,13 +96,10 @@ void dev::Hardware::Execution()
 		auto startCC = m_cpu.GetCC();
 		auto startFrame = m_display.GetFrameNum();
 		auto startTime = std::chrono::system_clock::now();
-
-		auto endFrameTime = std::chrono::system_clock::now();
+		auto startFrameTime = std::chrono::system_clock::now();
 
 		while (m_status == Status::RUN)
 		{
-			auto startFrameTime = std::chrono::system_clock::now();
-
 			auto frameNum = m_display.GetFrameNum();
 
 			do // rasterizes a frame
@@ -118,31 +115,28 @@ void dev::Hardware::Execution()
 			// vsync
 			if (m_status == Status::RUN)
 			{
-				auto currentTime = std::chrono::system_clock::now();
-    			auto frameExecutionDuration = currentTime - startFrameTime;
+				auto expectedEndFrameTime = startFrameTime + m_execDelays[static_cast<size_t>(m_execSpeed)];
+				auto frameDuration = m_execDelays[static_cast<size_t>(m_execSpeed)];
+				auto rasterizedFrameTime = std::chrono::system_clock::now();
 
-				auto targetFrameDuration = m_execDelays[static_cast<size_t>(m_execSpeed)];
-
-				using DurationType = decltype(frameExecutionDuration);
-				auto frameDuration = std::max<DurationType>(
-					frameExecutionDuration + m_reqHandlingTime,
-					targetFrameDuration
-				);
-
-				endFrameTime += frameDuration;
-
-				while (std::chrono::system_clock::now() < endFrameTime)
-				{
-					// Use smaller time slice for request handling
-					ReqHandling(m_reqHandlingTime / 10);
+				if (rasterizedFrameTime < expectedEndFrameTime){
+					while (std::chrono::system_clock::now() < expectedEndFrameTime)
+					{
+						// Use smaller time slice for request handling
+						ReqHandling(m_reqHandlingTime / 10);
+					}
+				}
+				else{
+					frameDuration = std::chrono::duration_cast<std::chrono::microseconds>(rasterizedFrameTime - startFrameTime);
 				}
 
-				auto actualFrameDuration = std::chrono::system_clock::now() -
-											startFrameTime;
-				auto actualUs = std::chrono::duration<double, std::micro>(actualFrameDuration).count();
-				if (actualUs > 0.0) {
-					m_actualSpeedPercent = m_execDelays[static_cast<size_t>(ExecSpeed::NORMAL)].count() / actualUs * 100.0;
+				if (frameDuration.count() > 0) {
+					double duration = frameDuration.count();
+					double expectedFrameDuration = m_execDelays[static_cast<size_t>(ExecSpeed::NORMAL)].count();
+					auto speed = expectedFrameDuration / duration * 100.0;
+					m_actualSpeedPercent = m_actualSpeedPercent * 0.9 + speed * 0.1;
 				}
+				startFrameTime += frameDuration;
 			}
 		}
 
