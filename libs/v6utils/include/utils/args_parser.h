@@ -62,7 +62,7 @@ namespace dev
 
 		bool IsRequirementSatisfied() const;
 
-		bool HasFlag(const std::string& _arg);
+		bool HasFlag(const std::string& _arg, const std::string& _help = "");
 
 		bool CheckUnknownArgs() const;
 

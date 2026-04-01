@@ -286,7 +286,7 @@ int main(int argc, char* argv[])
 	dev::ArgsParser args(argc, argv, "v6emul - Vector-06C Emulator");
 
 	// Check for --version early
-	if (args.HasFlag("version") || args.HasFlag("V")) {
+	if (args.HasFlag("version", "Print version and exit") || args.HasFlag("V")) {
 		std::cout << "v6emul 0.1.0" << std::endl;
 		return 0;
 	}
@@ -295,11 +295,11 @@ int main(int argc, char* argv[])
 	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
 	auto runFrames = args.GetInt("run-frames", "Run for N frames then exit", false, 0);
 	auto runCycles = args.GetInt("run-cycles", "Run for N CPU cycles then exit", false, 0);
-	bool haltExit = args.HasFlag("halt-exit");
-	bool dumpCpu = args.HasFlag("dump-cpu");
-	bool dumpMemory = args.HasFlag("dump-memory");
+	bool haltExit = args.HasFlag("halt-exit", "Stop execution when CPU executes HLT");
+	bool dumpCpu = args.HasFlag("dump-cpu", "Print CPU registers on exit");
+	bool dumpMemory = args.HasFlag("dump-memory", "Print full 64KB RAM dump on exit");
 	auto dumpRamdisk = args.GetInt("dump-ramdisk", "Print RAM-disk N (0-7) contents on exit", false, -1);
-	bool serve = args.HasFlag("serve");
+	bool serve = args.HasFlag("serve", "Start the IPC server mode");
 	auto tcpPort = args.GetInt("tcp-port", "TCP port for IPC server (default: 9876)", false, 9876);
 	auto speed = args.GetString("speed", "Execution speed: 1%, 20%, 50%, 100%, 200%, max", false, "");
 	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");

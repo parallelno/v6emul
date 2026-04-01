@@ -124,9 +124,12 @@ bool dev::ArgsParser::IsRequirementSatisfied() const
 	return m_requirementSatisfied;
 }
 
-bool dev::ArgsParser::HasFlag(const std::string& _arg)
+bool dev::ArgsParser::HasFlag(const std::string& _arg, const std::string& _help)
 {
 	m_knownArgs.insert(_arg);
+	if (!_help.empty()) {
+		m_help += std::format("--{} \n\ttype: flag\n\t{}\n\n", _arg, _help);
+	}
 	return m_args.contains(_arg);
 }
 
