@@ -83,7 +83,7 @@ bool Transport::Listen(uint16_t _port)
 
 	// Query actual port (important when _port == 0)
 	sockaddr_in boundAddr{};
-	int addrLen = sizeof(boundAddr);
+	socklen_t addrLen = sizeof(boundAddr);
 	if (getsockname(m_listenSock, reinterpret_cast<sockaddr*>(&boundAddr), &addrLen) == 0) {
 		m_port = ntohs(boundAddr.sin_port);
 	}

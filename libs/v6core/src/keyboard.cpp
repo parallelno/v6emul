@@ -1,4 +1,7 @@
 ﻿#include "core/keyboard.h"
+
+#include <cstring>
+
 #include "utils/utils.h"
 
 dev::Keyboard::Keyboard()

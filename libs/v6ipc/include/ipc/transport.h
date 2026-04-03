@@ -25,6 +25,7 @@ constexpr SocketType INVALID_SOCK = INVALID_SOCKET;
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 using SocketType = int;

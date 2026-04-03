@@ -316,10 +316,10 @@ auto dev::DisasmLine::PrintToBuffer(
 					dev::Uint8ToStrC(dataL) :
 					dev::Uint16ToStrC(dataW);
 
-				printed_chars = std::snprintf(&_buffer[current_char_idx], LINE_BUFF_LEN - current_char_idx, imm_str);
+				printed_chars = std::snprintf(&_buffer[current_char_idx], LINE_BUFF_LEN - current_char_idx, "%s", imm_str);
 			}
 			else {
-				printed_chars = std::snprintf(&_buffer[current_char_idx], LINE_BUFF_LEN - current_char_idx, cmdP->tokens[i]);
+				printed_chars = std::snprintf(&_buffer[current_char_idx], LINE_BUFF_LEN - current_char_idx, "%s", cmdP->tokens[i]);
 			}
 			// check for errors
 			if (printed_chars < 0) { return nullptr; }
@@ -348,7 +348,7 @@ auto dev::DisasmLine::PrintToBuffer(
 		_cpuState.regs.psw.ac ? "1" : "0",
 		_cpuState.regs.psw.p ? "1" : "0",
 		_cpuState.regs.psw.c ? "1" : "0",
-		_cpuState.cc);
+		static_cast<unsigned long long>(_cpuState.cc));
 
 	// check for errors
 	if (printed_chars < 0) { return nullptr; }

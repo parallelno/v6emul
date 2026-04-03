@@ -98,7 +98,7 @@ constexpr bool is_defined<T, decltype(typeid(T), void())> = true;
 
 	// Local time
 	template <typename... Args>
-	constexpr void Log(const std::string& _fmt, Args&&... args)
+	void Log(const std::string& _fmt, Args&&... args)
 	{
 		std::lock_guard<std::mutex> lock(logMutex);
 
