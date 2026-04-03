@@ -145,11 +145,9 @@ auto dev::TraceLog::GetDefaultLogPath()
 auto dev::TraceLog::GetLogFilename()
 -> std::string
 {
-	auto now = std::chrono::system_clock::now();
-	auto local_time = std::chrono::current_zone()->to_local(now);
-
-	auto saveLogFilename = std::format("{}_{:%Y-%m-%d_%H-%M}.txt",
-		TRACE_LOG_NAME, local_time);
+	auto saveLogFilename = std::format("{}_{}.txt",
+		TRACE_LOG_NAME,
+		dev::FormatLocalTime(std::chrono::system_clock::now(), "%Y-%m-%d_%H-%M"));
 
 	return saveLogFilename;
 }

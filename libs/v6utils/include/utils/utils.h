@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <ctime>
 #include <format>
 #include <iostream>
 #include <mutex>
@@ -12,7 +13,7 @@
 #include "utils/consts.h"
 #include "utils/result.h"
 
-namespace dev 
+namespace dev
 {
 
 // MACRO
@@ -64,21 +65,48 @@ constexpr bool is_defined<T, decltype(typeid(T), void())> = true;
 	//--------------------------------------------------------------
 
 	static std::mutex logMutex;
+
+	inline auto GetLocalTime(std::chrono::system_clock::time_point _timePoint)
+		-> std::tm
+	{
+		auto timeT = std::chrono::system_clock::to_time_t(_timePoint);
+		std::tm localTime{};
+
+	#if defined(_WIN32)
+		localtime_s(&localTime, &timeT);
+	#else
+		localtime_r(&timeT, &localTime);
+	#endif
+
+		return localTime;
+	}
+
+	inline auto FormatLocalTime(
+		std::chrono::system_clock::time_point _timePoint,
+		const char* _format = "%Y-%m-%d %H:%M:%S")
+		-> std::string
+	{
+		auto localTime = GetLocalTime(_timePoint);
+		char buffer[64] = {};
+
+		if (std::strftime(buffer, sizeof(buffer), _format, &localTime) == 0) {
+			return {};
+		}
+
+		return buffer;
+	}
+
 	// Local time
 	template <typename... Args>
 	constexpr void Log(const std::string& _fmt, Args&&... args)
 	{
-		logMutex.lock(); 
-
-		using namespace std::chrono;
+		std::lock_guard<std::mutex> lock(logMutex);
 
 		std::cout << "Local time " <<
-			floor<seconds>(current_zone()->to_local(system_clock::now())) <<
+			FormatLocalTime(std::chrono::system_clock::now()) <<
 			"  " <<
 			std::vformat(_fmt, std::make_format_args(args...)) <<
 			std::endl;
-
-		logMutex.unlock();
 	}
 
 	void RunApp(const std::string& dir, const std::string& appName);
@@ -110,7 +138,7 @@ constexpr bool is_defined<T, decltype(typeid(T), void())> = true;
 				(int)_err, _errStr);
 
 		if (_sendEmergencyMsg) _sendEmergencyMsg(_errStr);
-		
+
 		dev::ThreadSleep(30.0);
 		exit((int)_err);
 	}
@@ -145,7 +173,7 @@ constexpr bool is_defined<T, decltype(typeid(T), void())> = true;
 	{
 		return _a * _c + _b * (1.0 - _c);
 	}
-	inline int sign(int _val) 
+	inline int sign(int _val)
 	{
 		return (0 < _val) - (_val < 0);
 	}
@@ -153,7 +181,7 @@ constexpr bool is_defined<T, decltype(typeid(T), void())> = true;
 	{
 		return (double)rand() / RAND_MAX * (_max - _min) + _min;
 	}
-	inline double rnd(const double _max) 
+	inline double rnd(const double _max)
 	{
 		return rnd(0.0, _max);
 	}
@@ -191,13 +219,13 @@ constexpr bool is_defined<T, decltype(typeid(T), void())> = true;
 	auto LoadFile(const std::string& _path)
 		-> dev::Result<std::vector<uint8_t>>;
 
-	bool SaveFile(const std::string& _path, 
+	bool SaveFile(const std::string& _path,
 		const std::vector<uint8_t>& _data, const bool _override = true);
 
 	void DeleteFiles(const std::string& _dir, const std::string& _mask = "*");
 
 	size_t GetFileSize(const std::string& _path);
-	
+
 	auto GetDir(const std::string& _path)
 		-> std::string;
 
