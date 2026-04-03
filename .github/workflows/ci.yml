@@ -5,33 +5,68 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
-  build:
+  version:
+    name: Compute Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          DATE="$(git log -1 --date=format:'%Y.%m.%d' --format='%cd')"
+          HASH="$(git rev-parse --short=7 HEAD)"
+          echo "version=${DATE}-${HASH}" >> "$GITHUB_OUTPUT"
+
+  build-test:
+    name: Build and Test (${{ matrix.platform }})
+    needs: version
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            preset: ci
-            build-config: Release
+            platform: windows-x86_64
           - os: ubuntu-latest
-            preset: ci
-            build-config: Release
+            platform: linux-x86_64
           - os: macos-latest
-            preset: ci
-            build-config: Release
-
-    runs-on: ${{ matrix.os }}
+            platform: macos-x86_64
+    env:
+      V6EMUL_VERSION: ${{ needs.version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ci
 
       - name: Build
-        run: cmake --build build/ci --config ${{ matrix.build-config }}
+        run: cmake --build --preset ci --config Release
 
       - name: Test
-        run: ctest --test-dir build/ci --build-config ${{ matrix.build-config }} --output-on-failure --timeout 120
+        run: ctest --test-dir build/ci --build-config Release --output-on-failure --timeout 120
+
+      - name: Upload binary (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: v6emul-${{ needs.version.outputs.version }}-${{ matrix.platform }}
+          path: build/ci/app/Release/v6emul.exe
+
+      - name: Upload binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: v6emul-${{ needs.version.outputs.version }}-${{ matrix.platform }}
+          path: build/ci/app/v6emul

@@ -46,13 +46,30 @@ add_test(
 # ASM unit tests (assemble + run + validate via Python)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-add_test(
-    NAME asm_unit_tests
-    COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/run_unit_tests.py
-        --asm ${CMAKE_SOURCE_DIR}/tools/v6asm/v6asm.exe
-        --emu $<TARGET_FILE:v6emul>
-        --test-dir ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests
-        --out-dir ${CMAKE_BINARY_DIR}/tests/unit_tests_out
-        --expected ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/expected.json
+if(WIN32)
+    set(V6ASM_NAMES v6asm.exe v6asm)
+else()
+    set(V6ASM_NAMES v6asm)
+endif()
+
+find_program(
+    V6ASM_EXECUTABLE
+    NAMES ${V6ASM_NAMES}
+    PATHS ${CMAKE_SOURCE_DIR}/tools/v6asm
+    NO_DEFAULT_PATH
 )
+
+if(V6ASM_EXECUTABLE)
+    add_test(
+        NAME asm_unit_tests
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/run_unit_tests.py
+            --asm ${V6ASM_EXECUTABLE}
+            --emu $<TARGET_FILE:v6emul>
+            --test-dir ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests
+            --out-dir ${CMAKE_BINARY_DIR}/tests/unit_tests_out
+            --expected ${CMAKE_CURRENT_SOURCE_DIR}/unit_tests/expected.json
+    )
+else()
+    message(STATUS "asm_unit_tests disabled: no native v6asm executable found")
+endif()

@@ -11,6 +11,44 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(V6EMUL_VERSION_STRING "$ENV{V6EMUL_VERSION}")
+
+if(NOT V6EMUL_VERSION_STRING)
+    find_package(Git QUIET)
+    if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} log -1 --date=format:%Y.%m.%d --format=%cd
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE V6EMUL_GIT_DATE
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE V6EMUL_GIT_DATE_RESULT
+        )
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse --short=7 HEAD
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE V6EMUL_GIT_HASH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE V6EMUL_GIT_HASH_RESULT
+        )
+
+        if(V6EMUL_GIT_DATE_RESULT EQUAL 0 AND V6EMUL_GIT_HASH_RESULT EQUAL 0)
+            set(V6EMUL_VERSION_STRING "${V6EMUL_GIT_DATE}-${V6EMUL_GIT_HASH}")
+        endif()
+    endif()
+endif()
+
+if(NOT V6EMUL_VERSION_STRING)
+    set(V6EMUL_VERSION_STRING "${PROJECT_VERSION}")
+endif()
+
+message(STATUS "v6emul version: ${V6EMUL_VERSION_STRING}")
+
+configure_file(
+    ${CMAKE_SOURCE_DIR}/app/version.h.in
+    ${CMAKE_BINARY_DIR}/generated/v6emul_version.h
+    @ONLY
+)
+
 # Enable parallel compilation for MSVC
 if(MSVC)
     add_compile_options(/MP)

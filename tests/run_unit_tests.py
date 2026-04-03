@@ -40,7 +40,8 @@ STATUS_RE = re.compile(r"(HALT|EXIT)\s+at\s+PC=0x([0-9A-Fa-f]+)\s+after\s+(\d+)\
 
 def parse_args():
     p = argparse.ArgumentParser(description="i8080 ASM unit test runner")
-    p.add_argument("--asm", default="tools/v6asm/v6asm.exe", help="Path to v6asm assembler")
+    default_asm = Path("tools/v6asm") / ("v6asm.exe" if os.name == "nt" else "v6asm")
+    p.add_argument("--asm", default=str(default_asm), help="Path to v6asm assembler")
     p.add_argument("--emu", default="build/release/app/Release/v6emul.exe", help="Path to v6emul emulator")
     p.add_argument("--test-dir", default="tests/unit_tests", help="Path to unit_tests directory")
     p.add_argument("--out-dir", default="out/tests/unit_tests", help="Output directory for ROMs")

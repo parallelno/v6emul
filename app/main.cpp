@@ -14,8 +14,33 @@
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
 #include "ipc/commands.h"
+#include "v6emul_version.h"
 
 static constexpr uint8_t TEST_PORT = 0xED;
+
+namespace
+{
+	constexpr const char* APP_TITLE = "v6emul - Vector-06C Emulator";
+	constexpr const char* APP_COPYRIGHT = "(c) Aleksandr Fedotovskikh <mailforfriend@gmail.com>";
+
+	auto GetVersionString() -> std::string
+	{
+		return V6EMUL_VERSION;
+	}
+
+	auto GetCliDescription() -> std::string
+	{
+		return std::format(
+			"Command-line emulator for the Vector-06C Soviet PC, version {}\n{}",
+			GetVersionString(),
+			APP_COPYRIGHT);
+	}
+
+	void PrintTextBlock(const std::string& text)
+	{
+		std::cout << text << "\n\n";
+	}
+}
 
 // ── Test mode: load ROM, run headless, print results ─────────────────
 static int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
@@ -283,11 +308,11 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
 // ── Entry point ──────────────────────────────────────────────────────
 int main(int argc, char* argv[])
 {
-	dev::ArgsParser args(argc, argv, "v6emul - Vector-06C Emulator");
+	dev::ArgsParser args(argc, argv, GetCliDescription());
 
 	// Check for --version early
 	if (args.HasFlag("version", "Print version and exit") || args.HasFlag("V")) {
-		std::cout << "v6emul 0.1.0" << std::endl;
+		PrintTextBlock(GetVersionString());
 		return 0;
 	}
 
@@ -306,14 +331,16 @@ int main(int argc, char* argv[])
 
 	if (!args.IsRequirementSatisfied()) return 1;
 	if (!args.CheckUnknownArgs()) return 1;
+	if (args.HasFlag("help") || args.HasFlag("h")) return 0;
 
 	bool testMode = haltExit || runFrames > 0 || runCycles > 0;
 
 	// Banner mode: no flags at all
 	if (!testMode && !serve) {
-		std::cout << "v6emul - Vector-06C Emulator" << std::endl;
-		std::cout << "Use --serve to start the IPC server, or" << std::endl;
-		std::cout << "    --rom <file> with --halt-exit, --run-frames, or --run-cycles for test mode." << std::endl;
+		PrintTextBlock(
+			std::format(
+				"{}\nUse --serve to start the IPC server, or\n    --rom <file> with --halt-exit, --run-frames, or --run-cycles for test mode.",
+				APP_TITLE));
 		return 0;
 	}
 

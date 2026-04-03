@@ -1,0 +1,3 @@
+#pragma once
+
+#define V6EMUL_VERSION "@V6EMUL_VERSION_STRING@"

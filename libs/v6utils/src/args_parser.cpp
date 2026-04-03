@@ -87,7 +87,8 @@ int dev::ArgsParser::GetInt(const std::string& _arg,
 void dev::ArgsParser::AddDescriptionToHelp(const std::string& _description)
 {
 	m_help += "Help:\n";
-	m_help += std::format("Description: {}\n", _description);
+	m_help += "Description:\n";
+	m_help += std::format("{}\n\n", _description);
 	m_help += "format: -paramName <value> or -h, -help to show this guide.\n";
 	m_help += "Parameters:\n";
 }
@@ -115,7 +116,7 @@ void dev::ArgsParser::PrintHelp() const
 		!m_args.empty() &&
 		m_requirementSatisfied) return;
 
-	std::cout << std::format("\n{}", m_help);
+	std::cout << std::format("\n{}\n", m_help);
 }
 
 bool dev::ArgsParser::IsRequirementSatisfied() const
@@ -144,7 +145,7 @@ bool dev::ArgsParser::CheckUnknownArgs() const
 		}
 	}
 	if (!allKnown) {
-		std::cout << std::format("\n{}", m_help);
+		std::cout << std::format("\n{}\n", m_help);
 	}
 	return allKnown;
 }
