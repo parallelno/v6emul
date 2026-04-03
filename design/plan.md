@@ -28,8 +28,6 @@ The Devector repository contains a **WPF frontend** build (`src/main_wpf/`) that
 v6emul/
 ├── CMakeLists.txt              # top-level CMake (workspace root)
 ├── CMakePresets.json            # build presets (Debug, Release, CI)
-├── design.md                   # design spec (existing)
-├── plan.md                     # this document
 │
 ├── libs/
 │   ├── v6core/                 # emulator core static library (forked from Devector)

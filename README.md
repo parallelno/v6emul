@@ -1,36 +1,63 @@
 # v6emul
 
-`v6emul` is a Vector-06C emulator backend written in C++20. It exposes a TCP IPC server for frontends (test client, IDE integration, automation).
+> A command-line emulator for the Vector-06C Soviet PC.
 
-## Quick start
+## Quick Start
 
 ```bash
-cmake --preset release
-cmake --build --preset release
-
-# Run emulator server
-build/release/app/Release/v6emul.exe --serve
-
-# Run test client (default port 9876)
-build/release/tools/test_client/Release/test_client.exe
+./build/release/app/v6emul --serve            # start IPC server mode
+./build/release/app/v6emul --version          # print build version
+./build/release/app/v6emul --help             # show CLI help
+./build/release/app/v6emul --rom test.rom --halt-exit --dump-cpu
 ```
+
+[![CI](https://github.com/parallelno/v6emul/actions/workflows/ci.yml/badge.svg)](https://github.com/parallelno/v6emul/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+---
+
+## Overview
+
+`v6emul` is a headless emulator for the **Vector-06C** (Вектор-06Ц), a Soviet home computer built around the Intel 8080-compatible CPU.
+It runs as a command-line process, can serve external frontends over TCP IPC, and also works as a deterministic test runner for ROM-based and assembly-level validation.
+
+The project is split into reusable libraries for the emulator core, IPC transport, and shared utilities. In practice that means the same backend can power automated tests, a standalone client, or editor tooling without pulling GUI code into the core runtime.
+
+| Component | Purpose |
+|------|---------|
+| `v6emul` | Main emulator executable with banner, test, and IPC server modes |
+| `test_client` | Minimal client for connecting to the emulator and displaying frames |
+
+## Installation
+
+Download the latest archive from [Releases](https://github.com/parallelno/v6emul/releases), extract it, and run `v6emul` directly or add the extracted directory to your `PATH`.
 
 ## Documentation
 
-- [Documentation hub](docs/README.md)
-- [CLI reference](docs/cli.md)
-- [IPC protocol](docs/ipc-protocol.md)
-- [Architecture](docs/architecture.md)
-- [Building](docs/building.md)
-- [Test client](docs/test-client.md)
-- [Design document](docs/design.md)
-- [Implementation Plan](docs/plan.md)
+Full reference is in the [`docs/`](docs/README.md) folder:
 
-## Project structure
+- [CLI Usage](docs/cli.md) — arguments, modes, and command examples
+- [Test Client](docs/test-client.md) — running and using the sample client
+- [Building](docs/building.md) — prerequisites, presets, and test commands
+- [IPC Protocol](docs/ipc-protocol.md) — wire format, commands, and framing
 
-- `app/` - main executable and CLI startup
-- `libs/v6core/` - emulator core (CPU, memory, display, IO, audio, debug)
-- `libs/v6ipc/` - TCP server and public command protocol
-- `libs/v6utils/` - shared utilities (queues, args parser, helpers)
-- `tools/test_client/` - lightweight Win32 frame viewer
-- `tests/` - unit/integration/e2e/golden tests
+### Build from source
+
+Requires CMake 3.21+, a C++20 compiler, Git, and Python 3.8+ for the ASM unit test runner.
+
+```bash
+git clone https://github.com/parallelno/v6emul.git
+cd v6emul
+cmake --preset release
+cmake --build --preset release
+```
+
+## Tests
+
+```bash
+ctest --test-dir build/release --build-config Release --output-on-failure
+```
+
+## License
+
+[MIT](LICENSE)
