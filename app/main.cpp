@@ -9,6 +9,7 @@
 
 #include "core/hardware.h"
 #include "core/memory.h"
+#include "core/fdd_consts.h"
 #include "utils/utils.h"
 #include "utils/args_parser.h"
 #include "ipc/transport.h"
@@ -332,6 +333,9 @@ int main(int argc, char* argv[])
 	auto romPath = args.GetString("rom", "Path to a ROM file to load", false, "");
 	auto bootRomPath = args.GetString("boot-rom", "Path to a boot ROM file to map at address 0 on startup/reset", false, "");
 	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
+	auto fddPath = args.GetString("fdd", "Path to a floppy disk image to mount", false, "");
+	auto fddDrive = args.GetInt("fdd-drive", "FDD drive index (0-3, default: 0)", false, 0);
+	bool fddAutoboot = args.HasFlag("fdd-autoboot", "Reset and boot from the mounted floppy disk");
 	auto runFrames = args.GetInt("run-frames", "Run for N frames then exit", false, 0);
 	auto runCycles = args.GetInt("run-cycles", "Run for N CPU cycles then exit", false, 0);
 	bool haltExit = args.HasFlag("halt-exit", "Stop execution when CPU executes HLT");
@@ -363,6 +367,11 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
+	if (fddDrive < 0 || fddDrive > 3) {
+		std::cerr << std::format("Error: --fdd-drive must be 0-3, got {}", fddDrive) << std::endl;
+		return 1;
+	}
+
 	// Create hardware (heap-allocated due to ~2MB Memory inside)
 	auto hw = std::make_unique<dev::Hardware>(bootRomPath, "", true);
 
@@ -377,6 +386,26 @@ int main(int argc, char* argv[])
 		else if (speed == "max")  speedIdx = static_cast<int>(dev::Hardware::ExecSpeed::MAX);
 		if (speedIdx >= 0) {
 			hw->Request(dev::Hardware::Req::SET_CPU_SPEED, {{"speed", speedIdx}});
+		}
+	}
+
+	// Mount FDD if provided
+	if (!fddPath.empty()) {
+		auto fddData = dev::LoadFile(fddPath);
+		if (!fddData) {
+			std::cerr << std::format("Error: failed to load FDD image: {}", fddPath) << std::endl;
+			return 1;
+		}
+		std::cout << std::format("Mounting FDD: {} ({} bytes) on drive {}", fddPath, fddData->size(), fddDrive) << std::endl;
+		fddData->resize(FDD_SIZE, 0);
+		nlohmann::json mountJ = {
+			{"driveIdx", fddDrive},
+			{"data", *fddData},
+			{"path", fddPath}
+		};
+		hw->Request(dev::Hardware::Req::LOAD_FDD, mountJ);
+		if (fddAutoboot) {
+			hw->Request(dev::Hardware::Req::RESET);
 		}
 	}
 

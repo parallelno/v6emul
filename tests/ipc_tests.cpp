@@ -7,6 +7,7 @@
 
 #include "core/hardware.h"
 #include "core/display.h"
+#include "core/fdd_consts.h"
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
 #include "ipc/commands.h"
@@ -390,6 +391,147 @@ static void test_response_helpers()
 	ASSERT_EQ(errResp[dev::ipc::FIELD_ERROR].get<std::string>(), std::string("something broke"));
 }
 
+// ── Test: LOAD_ROM via IPC ──────────────────────────────────────────
+static void test_load_rom()
+{
+	ServerContext ctx;
+	ASSERT_TRUE(ctx.Start());
+
+	TestClient client;
+	ASSERT_TRUE(client.Connect(ctx.port));
+	ctx.WaitForClient();
+	ctx.StartLoop();
+
+	// Load a small program at address 0x100: MVI A, 0x42; HLT
+	std::vector<uint8_t> rom = {0x3E, 0x42, 0x76};
+	nlohmann::json loadRomReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::LOAD_ROM)},
+		{dev::ipc::FIELD_DATA, {{"data", rom}, {"addr", 0x100}, {"autorun", false}}}
+	};
+	auto resp = client.SendRequest(loadRomReq);
+	ASSERT_TRUE(resp[dev::ipc::FIELD_OK].get<bool>());
+
+	// Verify the data landed in RAM at 0x100
+	nlohmann::json getByteReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_BYTE_RAM)},
+		{dev::ipc::FIELD_DATA, {{"addr", 0x100}}}
+	};
+	auto getResp = client.SendRequest(getByteReq);
+	ASSERT_TRUE(getResp[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_EQ(getResp[dev::ipc::FIELD_DATA]["data"].get<uint8_t>(), (uint8_t)0x3E);
+
+	// Verify CPU was restarted (PC should be 0 after Restart)
+	nlohmann::json getPcReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_REG_PC)},
+		{dev::ipc::FIELD_DATA, {}}
+	};
+	auto pcResp = client.SendRequest(getPcReq);
+	ASSERT_TRUE(pcResp[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_EQ(pcResp[dev::ipc::FIELD_DATA]["pc"].get<uint16_t>(), (uint16_t)0);
+
+	client.CloseSocket();
+	ctx.Close();
+}
+
+// ── Test: MOUNT_FDD via IPC ─────────────────────────────────────────
+static void test_mount_fdd()
+{
+	ServerContext ctx;
+	ASSERT_TRUE(ctx.Start());
+
+	TestClient client;
+	ASSERT_TRUE(client.Connect(ctx.port));
+	ctx.WaitForClient();
+	ctx.StartLoop();
+
+	// Create a small FDD image (will be normalized to FDD_SIZE)
+	std::vector<uint8_t> fddData(1024, 0xAA);
+	nlohmann::json mountReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::MOUNT_FDD)},
+		{dev::ipc::FIELD_DATA, {{"data", fddData}, {"driveIdx", 1}, {"path", "test.fdd"}, {"autoBoot", false}}}
+	};
+	auto resp = client.SendRequest(mountReq);
+	ASSERT_TRUE(resp[dev::ipc::FIELD_OK].get<bool>());
+
+	// Verify drive 1 is mounted
+	nlohmann::json infoReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_FDD_INFO)},
+		{dev::ipc::FIELD_DATA, {{"driveIdx", 1}}}
+	};
+	auto infoResp = client.SendRequest(infoReq);
+	ASSERT_TRUE(infoResp[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_TRUE(infoResp[dev::ipc::FIELD_DATA]["mounted"].get<bool>());
+	ASSERT_EQ(infoResp[dev::ipc::FIELD_DATA]["path"].get<std::string>(), std::string("test.fdd"));
+
+	// Verify drive 0 is NOT mounted
+	nlohmann::json info0Req = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_FDD_INFO)},
+		{dev::ipc::FIELD_DATA, {{"driveIdx", 0}}}
+	};
+	auto info0Resp = client.SendRequest(info0Req);
+	ASSERT_TRUE(info0Resp[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_TRUE(!info0Resp[dev::ipc::FIELD_DATA]["mounted"].get<bool>());
+
+	client.CloseSocket();
+	ctx.Close();
+}
+
+// ── Test: FDD persistence workflow ──────────────────────────────────
+static void test_fdd_persistence()
+{
+	ServerContext ctx;
+	ASSERT_TRUE(ctx.Start());
+
+	TestClient client;
+	ASSERT_TRUE(client.Connect(ctx.port));
+	ctx.WaitForClient();
+	ctx.StartLoop();
+
+	// Mount a FDD image on drive 0
+	std::vector<uint8_t> fddData(FDD_SIZE, 0);
+	fddData[0] = 0xDE;
+	fddData[1] = 0xAD;
+	nlohmann::json mountReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::MOUNT_FDD)},
+		{dev::ipc::FIELD_DATA, {{"data", fddData}, {"driveIdx", 0}, {"path", "persist.fdd"}, {"autoBoot", false}}}
+	};
+	auto mountResp = client.SendRequest(mountReq);
+	ASSERT_TRUE(mountResp[dev::ipc::FIELD_OK].get<bool>());
+
+	// Check initial state: mounted, not dirty
+	nlohmann::json infoReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_FDD_INFO)},
+		{dev::ipc::FIELD_DATA, {{"driveIdx", 0}}}
+	};
+	auto infoResp = client.SendRequest(infoReq);
+	ASSERT_TRUE(infoResp[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_TRUE(infoResp[dev::ipc::FIELD_DATA]["mounted"].get<bool>());
+	ASSERT_TRUE(!infoResp[dev::ipc::FIELD_DATA]["updated"].get<bool>());
+
+	// Export the disk image
+	nlohmann::json getImgReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_FDD_IMAGE)},
+		{dev::ipc::FIELD_DATA, {{"driveIdx", 0}}}
+	};
+	auto imgResp = client.SendRequest(getImgReq);
+	ASSERT_TRUE(imgResp[dev::ipc::FIELD_OK].get<bool>());
+	auto imgData = imgResp[dev::ipc::FIELD_DATA]["data"].get<std::vector<uint8_t>>();
+	ASSERT_EQ(imgData.size(), (size_t)FDD_SIZE);
+	ASSERT_EQ(imgData[0], (uint8_t)0xDE);
+	ASSERT_EQ(imgData[1], (uint8_t)0xAD);
+
+	// Clear dirty flag
+	nlohmann::json resetReq = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::RESET_UPDATE_FDD)},
+		{dev::ipc::FIELD_DATA, {{"driveIdx", 0}}}
+	};
+	auto resetResp = client.SendRequest(resetReq);
+	ASSERT_TRUE(resetResp[dev::ipc::FIELD_OK].get<bool>());
+
+	client.CloseSocket();
+	ctx.Close();
+}
+
 int main()
 {
 	test_protocol_encode_decode();
@@ -398,6 +540,9 @@ int main()
 	test_get_regs();
 	test_memory_round_trip();
 	test_run_and_fetch_frame();
+	test_load_rom();
+	test_mount_fdd();
+	test_fdd_persistence();
 
 	std::cout << "IPC Tests: " << tests_passed << "/" << tests_run << " passed";
 	if (tests_failed > 0) {

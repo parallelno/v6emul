@@ -505,6 +505,33 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		m_debugAttached = dataJ["data"];
 		break;
 
+	case Req::LOAD_ROM:
+	{
+		auto data = dataJ["data"].get<std::vector<uint8_t>>();
+		int addr = dataJ.value("addr", 0);
+		bool autorun = dataJ.value("autorun", false);
+		Stop();
+		m_memory.SetRam(addr, data);
+		Restart();
+		if (autorun) Run();
+		break;
+	}
+
+	case Req::MOUNT_FDD:
+	{
+		auto data = dataJ["data"].get<std::vector<uint8_t>>();
+		int driveIdx = dataJ.value("driveIdx", 0);
+		std::string path = dataJ.value("path", std::string(""));
+		bool autoBoot = dataJ.value("autoBoot", false);
+		data.resize(FDD_SIZE, 0);
+		m_fdc.Mount(driveIdx, data, path);
+		if (autoBoot) {
+			Reset();
+			Run();
+		}
+		break;
+	}
+
 	default:
 		out = DebugReqHandling(req, dataJ, m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 	}

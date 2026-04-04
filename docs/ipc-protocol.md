@@ -198,6 +198,34 @@ Speed values for `SET_CPU_SPEED`:
 | 25 | `GET_FDD_IMAGE` | `{"driveIdx": int}` | `{"data": [bytes]}` |
 | 46 | `LOAD_FDD` | `{"driveIdx": int, "data": [bytes], "path": string}` | — |
 | 47 | `RESET_UPDATE_FDD` | `{"driveIdx": int}` | — |
+| 89 | `LOAD_ROM` | `{"data": [bytes], "addr": int, "autorun": bool}` | — |
+| 90 | `MOUNT_FDD` | `{"data": [bytes], "driveIdx": int, "path": string, "autoBoot": bool}` | — |
+
+#### LOAD_ROM (cmd 89)
+
+High-level ROM loading command. Stops emulation, writes `data` into RAM starting at `addr`, performs a `RESTART` (disables ROM overlay, resets CPU), and optionally starts running.
+
+- `data` — raw ROM bytes
+- `addr` — load address (default `0`)
+- `autorun` — if `true`, starts emulation after loading (default `false`)
+
+#### MOUNT_FDD (cmd 90)
+
+High-level floppy disk mounting command. Pads/truncates `data` to the standard FDD size (819,200 bytes), mounts it on the specified drive, and optionally resets the machine to boot from disk.
+
+- `data` — raw disk image bytes
+- `driveIdx` — drive index 0–3 (default `0`)
+- `path` — original file path for display purposes
+- `autoBoot` — if `true`, performs `RESET` (enables boot ROM) and starts emulation (default `false`)
+
+#### FDD Persistence Workflow
+
+To implement save/discard for modified floppy disks:
+
+1. **Poll for changes**: Send `GET_FDD_INFO` with `{"driveIdx": N}`. Check the `updated` field — `true` means the disk has been written to.
+2. **Export disk image**: Send `GET_FDD_IMAGE` with `{"driveIdx": N}`. Returns the full 819,200-byte image in `data`.
+3. **Save to file**: Write the exported bytes to disk (client-side).
+4. **Clear dirty flag**: Send `RESET_UPDATE_FDD` with `{"driveIdx": N}` to mark the disk as clean.
 
 ### Keyboard
 

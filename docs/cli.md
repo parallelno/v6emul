@@ -26,6 +26,16 @@ v6emul operates in one of three modes depending on the flags provided:
 | `--rom <path>` | string | *(none)* | Path to a ROM file to load into emulator memory |
 | `--load-addr <addr>` | int | `0` | Memory address to load the ROM at. Supports hex (`0x100`) and decimal (`256`) |
 
+### FDD (Floppy Disk) Loading
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--fdd <path>` | string | *(none)* | Path to a floppy disk image to mount |
+| `--fdd-drive <N>` | int | `0` | FDD drive index (0–3) |
+| `--fdd-autoboot` | flag | — | Reset and boot from the mounted floppy disk |
+
+`--fdd` loads a floppy disk image file, pads or truncates it to the standard FDD size (819,200 bytes), and mounts it on the specified drive. With `--fdd-autoboot`, the emulator performs a `RESET` after mounting so the boot ROM (if present) can boot from the floppy.
+
 `--boot-rom` loads a ROM overlay through the core memory subsystem. It is active at startup and after `RESET`, and it is disabled by `RESTART`. In test mode, `--rom` still loads into RAM and switches execution into RAM mode before running.
 
 ### Execution Control
@@ -92,6 +102,18 @@ v6emul --rom test.rom --halt-exit --dump-cpu
 v6emul --rom test.rom --run-frames 1000 --dump-cpu
 ```
 
+### Mount a floppy disk image
+
+```bash
+v6emul --boot-rom res/boot/boot.bin --fdd game.fdd --serve
+```
+
+### Mount a floppy disk on drive 1 and autoboot
+
+```bash
+v6emul --boot-rom res/boot/boot.bin --fdd game.fdd --fdd-drive 1 --fdd-autoboot --serve
+```
+
 ### Use a custom TCP port
 
 ```bash
@@ -116,3 +138,5 @@ The exit line reports the stop reason (`HALT` or `EXIT`), the program counter, c
 - Missing required argument values print a requirement message.
 - ROM load failures print an error and exit with code 1.
 - Boot ROM load failures print an error and exit with code 1.
+- FDD image load failures print an error and exit with code 1.
+- Invalid `--fdd-drive` values (outside 0–3) print an error and exit with code 1.
