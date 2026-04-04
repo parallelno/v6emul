@@ -3,6 +3,9 @@
 #include <cstring>
 #include <vector>
 #include <memory>
+#include <filesystem>
+#include <fstream>
+#include <chrono>
 #include "core/memory.h"
 
 static int tests_run = 0;
@@ -33,6 +36,18 @@ static int tests_failed = 0;
 // Helper: create a Memory with no boot/ramdisk files (heap-allocated to avoid stack overflow)
 static std::unique_ptr<dev::Memory> MakeMemory() {
     return std::make_unique<dev::Memory>("", "", true);
+}
+
+static std::filesystem::path WriteTempBinaryFile(const std::vector<uint8_t>& data) {
+    auto timestamp = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    auto path = std::filesystem::temp_directory_path() /
+        ("v6emul_boot_rom_" + std::to_string(timestamp) + ".bin");
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    out.close();
+
+    return path;
 }
 
 static void test_init_zeros() {
@@ -105,6 +120,28 @@ static void test_rom_disabled_after_restart() {
     ASSERT_TRUE(!mem->IsRomEnabled());
 }
 
+static void test_boot_rom_overlays_ram_until_restart() {
+    auto bootRomPath = WriteTempBinaryFile({0x3E, 0x9B, 0x76});
+    auto mem = std::make_unique<dev::Memory>(bootRomPath.string(), "", true);
+
+    mem->Init();
+    mem->SetByteGlobal(0x0000, 0x00);
+    mem->SetByteGlobal(0x0001, 0x00);
+
+    ASSERT_TRUE(mem->IsRomEnabled());
+    ASSERT_EQ(mem->GetByteGlobal(0x0000), 0x00);
+    ASSERT_EQ(mem->GetByte(0x0000), 0x3E);
+    ASSERT_EQ(mem->GetByte(0x0001), 0x9B);
+
+    mem->Restart();
+
+    ASSERT_TRUE(!mem->IsRomEnabled());
+    ASSERT_EQ(mem->GetByte(0x0000), 0x00);
+    ASSERT_EQ(mem->GetByte(0x0001), 0x00);
+
+    std::filesystem::remove(bootRomPath);
+}
+
 static void test_boundary_addresses() {
     auto mem = MakeMemory();
     mem->Init();
@@ -149,6 +186,7 @@ int main()
     test_global_addr_main_ram();
     test_rom_enabled_after_init();
     test_rom_disabled_after_restart();
+    test_boot_rom_overlays_ram_until_restart();
     test_boundary_addresses();
     test_ramdisk_mapping_init();
     test_set_ramdisk_mode();

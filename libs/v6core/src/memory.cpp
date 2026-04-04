@@ -10,12 +10,12 @@ dev::Memory::Memory(const std::string& _pathBootData, const std::string& _pathRa
 	m_ramDiskClearAfterRestart(_ramDiskClearAfterRestart)
 {
 	if (!_pathBootData.empty()) {
-		auto res = dev::LoadFile(dev::GetExecutableDir() + _pathBootData);
+		auto res = dev::LoadFile(_pathBootData);
 		if (res) m_rom = *res;
 	}
 
 	if (!_pathRamDiskData.empty()) {
-		auto res = dev::LoadFile(dev::GetExecutableDir() + _pathRamDiskData);
+		auto res = dev::LoadFile(_pathRamDiskData);
 		if (res) {
 			RamDiskData ramDiskData = *res;
 			ramDiskData.resize(MEMORY_RAMDISK_LEN * RAM_DISK_MAX);

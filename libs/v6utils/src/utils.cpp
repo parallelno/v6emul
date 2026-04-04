@@ -82,16 +82,24 @@ auto dev::LoadTextFile(const std::string& _path)
 auto dev::LoadFile(const std::string& _path)
 -> Result<std::vector<uint8_t>>
 {
-	if (!IsFileExist(_path)) {
+	if (_path.empty()) {
 		return {};
 	}
 
+	auto resolvedPath = _path;
+	if (!IsFileExist(resolvedPath)) {
+		resolvedPath = dev::GetExecutableDir() + _path;
+		if (!IsFileExist(resolvedPath)) {
+			return {};
+		}
+	}
+
 	// Open the file in binary mode
-	std::ifstream file(_path, std::ios::binary);
+	std::ifstream file(resolvedPath, std::ios::binary);
 
 	// Check if the file is opened successfully
 	if (!file.is_open()) {
-		std::cerr << "Failed to open file: " << _path << std::endl;
+		std::cerr << "Failed to open file: " << resolvedPath << std::endl;
 		return {};
 	}
 

@@ -43,6 +43,15 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/run_golden.cmake
 )
 
+add_test(
+    NAME golden_test_boot_rom
+    COMMAND ${CMAKE_COMMAND}
+        -DCMD=$<TARGET_FILE:v6emul>
+        "-DARGS=--boot-rom;${CMAKE_SOURCE_DIR}/res/boot/boot.bin;--run-cycles;1;--dump-cpu"
+        -DEXPECTED=${GOLDEN_DIR}/test_boot_rom.expected
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run_golden.cmake
+)
+
 # ASM unit tests (assemble + run + validate via Python)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 

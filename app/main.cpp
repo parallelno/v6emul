@@ -40,6 +40,19 @@ namespace
 	{
 		std::cout << text << "\n\n";
 	}
+
+	auto CanLoadStartupFile(const std::string& path) -> bool
+	{
+		if (path.empty()) {
+			return true;
+		}
+
+		if (dev::LoadFile(path)) {
+			return true;
+		}
+
+		return static_cast<bool>(dev::LoadFile(dev::GetExecutableDir() + path));
+	}
 }
 
 // ── Test mode: load ROM, run headless, print results ─────────────────
@@ -70,10 +83,10 @@ static int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
 			{"data", romData}
 		};
 		_hw.Request(dev::Hardware::Req::SET_MEM, setMemJ);
-	}
 
-	// Restart: disable ROM mapping, reset CPU to PC=0
-	_hw.Request(dev::Hardware::Req::RESTART);
+		// Restart into RAM execution after loading a test ROM image.
+		_hw.Request(dev::Hardware::Req::RESTART);
+	}
 
 	// Run headless with stop conditions
 	nlohmann::json headlessJ = {
@@ -317,6 +330,7 @@ int main(int argc, char* argv[])
 	}
 
 	auto romPath = args.GetString("rom", "Path to a ROM file to load", false, "");
+	auto bootRomPath = args.GetString("boot-rom", "Path to a boot ROM file to map at address 0 on startup/reset", false, "");
 	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
 	auto runFrames = args.GetInt("run-frames", "Run for N frames then exit", false, 0);
 	auto runCycles = args.GetInt("run-cycles", "Run for N CPU cycles then exit", false, 0);
@@ -344,8 +358,13 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
+	if (!bootRomPath.empty() && !CanLoadStartupFile(bootRomPath)) {
+		std::cerr << std::format("Error: failed to load boot ROM file: {}", bootRomPath) << std::endl;
+		return 1;
+	}
+
 	// Create hardware (heap-allocated due to ~2MB Memory inside)
-	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto hw = std::make_unique<dev::Hardware>(bootRomPath, "", true);
 
 	// Apply speed setting if provided
 	if (!speed.empty()) {

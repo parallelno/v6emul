@@ -22,8 +22,11 @@ v6emul operates in one of three modes depending on the flags provided:
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
+| `--boot-rom <path>` | string | *(none)* | Path to a boot ROM file mapped at address `0x0000` on startup and after `RESET` |
 | `--rom <path>` | string | *(none)* | Path to a ROM file to load into emulator memory |
 | `--load-addr <addr>` | int | `0` | Memory address to load the ROM at. Supports hex (`0x100`) and decimal (`256`) |
+
+`--boot-rom` loads a ROM overlay through the core memory subsystem. It is active at startup and after `RESET`, and it is disabled by `RESTART`. In test mode, `--rom` still loads into RAM and switches execution into RAM mode before running.
 
 ### Execution Control
 
@@ -63,6 +66,12 @@ v6emul operates in one of three modes depending on the flags provided:
 
 ```bash
 v6emul --rom game.rom --load-addr 0x100 --serve
+```
+
+### Start IPC server with a boot ROM
+
+```bash
+v6emul --boot-rom res/boot/boot.bin --serve
 ```
 
 ### Run at maximum speed
@@ -106,3 +115,4 @@ The exit line reports the stop reason (`HALT` or `EXIT`), the program counter, c
 - Unknown arguments produce an error message and print the help text.
 - Missing required argument values print a requirement message.
 - ROM load failures print an error and exit with code 1.
+- Boot ROM load failures print an error and exit with code 1.
