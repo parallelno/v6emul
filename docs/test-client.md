@@ -25,6 +25,31 @@ Press **Escape** to close.
 
 ## How It Works
 
+### Keyboard Input
+
+The client captures `WM_KEYDOWN`, `WM_KEYUP`, `WM_SYSKEYDOWN`, and `WM_SYSKEYUP` messages. Each key event is mapped from a Win32 virtual key code to the emulator's abstract `KeyCode` enum (mirrored locally to avoid linking v6core) and queued in a thread-safe buffer.
+
+The worker thread drains the queue before each frame request and sends `KEY_HANDLING` IPC commands (one per event) to the emulator. This keeps keyboard latency within one frame interval (~20ms).
+
+Left/right modifier keys (Shift, Ctrl, Alt) are distinguished using `MapVirtualKey` and the extended-key flag in `lParam`. `WM_SYSKEYDOWN/UP` is intercepted to prevent Windows from stealing Alt and F10.
+
+**Key mapping summary:**
+
+| PC Key | Vector-06C Function |
+|--------|--------------------|
+| A–Z, 0–9 | Direct letter/digit mapping |
+| Space, Tab, Enter, Backspace | Space, TAB, VK (enter), ZB (backspace) |
+| Arrow keys | Cursor movement |
+| `, - = [ ] \ ; ' , . / | Punctuation / symbols |
+| F1–F5 | Function keys F1–F5 |
+| F6 | RUS/LAT toggle |
+| F7, F8 | LDA (left diagonal arrow), STR |
+| F11 | RESET (BLK+VVOD) — enable ROM |
+| F12 | RESTART (BLK+SBR) — disable ROM |
+| Shift, Ctrl | SS (shift), US (ctrl) |
+| Alt, Win | RUS/LAT |
+| Escape | Close the test client window |
+
 ### Frame Streaming
 
 The client runs a **worker thread** that continuously:
@@ -74,8 +99,9 @@ The frame (768×312) is scaled 2× by default to fill the window. The window is 
 │                  │                        │              │
 │  Worker Thread   │  GET_FRAME_RAW @ 50fps │  Emulation   │
 │  (send/recv)     │  GET_HW_MAIN_STATS @1s │  Thread      │
-│        │         │                        │              │
-│        ▼         │                        └──────────────┘
+│  KEY_HANDLING    │  KEY_HANDLING on input  │              │
+│        │         │                        └──────────────┘
+│        ▼         │
 │  Back Buffer     │
 │   ↕ swap         │
 │  Front Buffer    │
@@ -83,6 +109,7 @@ The frame (768×312) is scaled 2× by default to fill the window. The window is 
 │        ▼         │
 │  UI Thread       │
 │  (WM_TIMER +     │
+│   WM_KEY* +      │
 │   StretchDIBits) │
 └─────────────────┘
 ```
