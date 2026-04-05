@@ -131,11 +131,14 @@ static constexpr int FRAME_H = 312;
 static constexpr int FRAME_PIXELS = FRAME_W * FRAME_H;
 static constexpr int FRAME_BYTES = FRAME_PIXELS * 4;
 // Scale factor for the window (768×312 is quite wide and short)
-static constexpr int SCALE = 2;
+static constexpr int SCALE = 1;
+
+// 50 fps
+static constexpr auto FRAME_INTERVAL = std::chrono::microseconds(5000);
 
 // Timer ID for repaint
 static constexpr UINT_PTR TIMER_ID = 1;
-static constexpr UINT TIMER_MS = 15;
+static constexpr UINT TIMER_MS = 10;
 
 // ── Globals ───────────────────────────────────────────────────────────
 static SOCKET g_sock = INVALID_SOCKET;
@@ -158,6 +161,9 @@ static std::atomic<int> g_speedPercent{0};
 // Worker thread control
 static std::atomic<bool> g_running{true};
 static HWND g_hwnd = nullptr;
+
+// Diagnostic: bypass server, generate local frames
+static bool g_testLocal = false;
 
 // Key event queue: UI thread pushes, worker thread drains and sends
 struct KeyEvent { int keyCode; int action; };
@@ -263,23 +269,49 @@ static bool FlushKeyEvents()
 // ── Worker thread: fetch frames at 50 fps ─────────────────────────────
 static void WorkerThread()
 {
-	using clock = std::chrono::system_clock;
-	static constexpr auto FRAME_INTERVAL = std::chrono::microseconds(20000); // 50 fps
-	static constexpr auto SLEEP_SLICE = std::chrono::microseconds(100);
+	using clock = std::chrono::steady_clock;
+
 
 	DWORD lastStatsTick = GetTickCount();
-	auto endFrameTime = clock::now();
+	auto nextFrameTime = clock::now();
 
 	while (g_running.load()) {
+
+		if (g_testLocal) {
+			// ── Diagnostic: generate a solid-color frame locally ──
+			memset(g_frameBack.data(), rand() & 0xFF, FRAME_BYTES);
+
+			{
+				std::lock_guard lock(g_frameMutex);
+				g_frameFront.swap(g_frameBack);
+			}
+			g_frameReady.store(true);
+			g_recvCount.fetch_add(1);
+
+			// nextFrameTime += FRAME_INTERVAL;
+			// auto clockNow = clock::now();
+			// if (nextFrameTime > clockNow) {
+			// 	auto remaining = nextFrameTime - clockNow;
+			// 	auto sleepPart = remaining - std::chrono::milliseconds(10);
+			// 	if (sleepPart > std::chrono::milliseconds(0))
+			// 		std::this_thread::sleep_for(sleepPart);
+			// 	while (clock::now() < nextFrameTime)
+			// 		;
+			// } else {
+			// 	nextFrameTime = clockNow;
+			// }
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+			continue;
+		}
+
 		if (!g_connected.load()) {
 			if (!ConnectToServer()) {
 				Sleep(500);
-				endFrameTime = clock::now();
+				nextFrameTime = clock::now();
 				continue;
 			}
 		}
-
-		auto startFrameTime = clock::now();
 
 		// Every ~1 second, request stats (inline, doesn't skip a frame)
 		DWORD now = GetTickCount();
@@ -345,15 +377,24 @@ static void WorkerThread()
 		g_frameReady.store(true);
 		g_recvCount.fetch_add(1);
 
-		// vsync: same approach as hardware.cpp
-		auto frameDuration = clock::now() - startFrameTime;
-		using DurationType = decltype(frameDuration);
-		endFrameTime += std::max<DurationType>(frameDuration, FRAME_INTERVAL);
-
-		while (clock::now() < endFrameTime)
-		{
-			std::this_thread::sleep_for(SLEEP_SLICE);
-		}
+		// Pace to 50 fps using absolute time tracking.
+		// Hybrid sleep+spin: sleep most of the interval, then spin-wait
+		// the last ~2ms for precision. Pure sleep_for overshoots by 1-2ms
+		// on Windows even with timeBeginPeriod(1).
+		// nextFrameTime += FRAME_INTERVAL;
+		// auto clockNow = clock::now();
+		// if (nextFrameTime > clockNow) {
+		// 	auto remaining = nextFrameTime - clockNow;
+		// 	auto sleepPart = remaining - std::chrono::milliseconds(2);
+		// 	if (sleepPart > std::chrono::milliseconds(0))
+		// 		std::this_thread::sleep_for(sleepPart);
+		// 	while (clock::now() < nextFrameTime)
+		// 		; // spin-wait for precision
+		// } else {
+		// 	// Fell behind (e.g. slow network) — reset to avoid burst catch-up
+		// 	nextFrameTime = clockNow;
+		// }
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 }
 
@@ -367,7 +408,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 	switch (msg)
 	{
 	case WM_CREATE:
-		timeBeginPeriod(1);
 		SetTimer(hwnd, TIMER_ID, TIMER_MS, nullptr);
 		g_lastFpsTick = GetTickCount();
 		return 0;
@@ -467,7 +507,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 	case WM_DESTROY:
 		KillTimer(hwnd, TIMER_ID);
-		timeEndPeriod(1);
 		g_running.store(false);
 		Disconnect();
 		PostQuitMessage(0);
@@ -483,12 +522,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 	// Parse --port from command line
 	int argc;
 	LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-	for (int i = 1; i < argc - 1; ++i) {
-		if (wcscmp(argv[i], L"--port") == 0) {
+	for (int i = 1; i < argc; ++i) {
+		if (wcscmp(argv[i], L"--port") == 0 && i + 1 < argc) {
 			g_port = static_cast<uint16_t>(_wtoi(argv[i + 1]));
+			++i;
+		}
+		else if (wcscmp(argv[i], L"--test-local") == 0) {
+			g_testLocal = true;
 		}
 	}
 	LocalFree(argv);
+
+	// Set system timer resolution to 1ms for accurate sleep_for timing.
+	// Must be called before the worker thread starts.
+	timeBeginPeriod(1);
 
 	// Init Winsock
 	WSADATA wsa;
@@ -571,6 +618,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 	Disconnect(); // unblocks recv in worker
 	if (worker.joinable()) worker.join();
 
+	timeEndPeriod(1);
 	WSACleanup();
 	return static_cast<int>(msg.wParam);
 }
