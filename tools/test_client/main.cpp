@@ -134,7 +134,7 @@ static constexpr int FRAME_BYTES = FRAME_PIXELS * 4;
 static constexpr int SCALE = 1;
 
 // 50 fps
-static constexpr auto FRAME_INTERVAL = std::chrono::microseconds(5000);
+static constexpr auto FRAME_INTERVAL = std::chrono::microseconds(20000);
 
 // Timer ID for repaint
 static constexpr UINT_PTR TIMER_ID = 1;
@@ -152,6 +152,9 @@ static std::vector<uint32_t> g_frameFront(FRAME_PIXELS, 0);
 static std::vector<uint32_t> g_frameBack(FRAME_PIXELS, 0);
 static std::mutex g_frameMutex;
 static std::atomic<bool> g_frameReady{false};
+
+// Paint buffer: UI thread copies g_frameFront here under lock, then paints without lock
+static std::vector<uint32_t> g_paintBuffer(FRAME_PIXELS, 0);
 
 // Stats
 static std::atomic<int> g_recvCount{0};
@@ -288,19 +291,18 @@ static void WorkerThread()
 			g_frameReady.store(true);
 			g_recvCount.fetch_add(1);
 
-			// nextFrameTime += FRAME_INTERVAL;
-			// auto clockNow = clock::now();
-			// if (nextFrameTime > clockNow) {
-			// 	auto remaining = nextFrameTime - clockNow;
-			// 	auto sleepPart = remaining - std::chrono::milliseconds(10);
-			// 	if (sleepPart > std::chrono::milliseconds(0))
-			// 		std::this_thread::sleep_for(sleepPart);
-			// 	while (clock::now() < nextFrameTime)
-			// 		;
-			// } else {
-			// 	nextFrameTime = clockNow;
-			// }
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			nextFrameTime += FRAME_INTERVAL;
+			auto clockNow = clock::now();
+			if (nextFrameTime > clockNow) {
+				auto remaining = nextFrameTime - clockNow;
+				auto sleepPart = remaining - std::chrono::milliseconds(2);
+				if (sleepPart > std::chrono::milliseconds(0))
+					std::this_thread::sleep_for(sleepPart);
+				while (clock::now() < nextFrameTime)
+					;
+			} else {
+				nextFrameTime = clockNow;
+			}
 
 			continue;
 		}
@@ -381,20 +383,19 @@ static void WorkerThread()
 		// Hybrid sleep+spin: sleep most of the interval, then spin-wait
 		// the last ~2ms for precision. Pure sleep_for overshoots by 1-2ms
 		// on Windows even with timeBeginPeriod(1).
-		// nextFrameTime += FRAME_INTERVAL;
-		// auto clockNow = clock::now();
-		// if (nextFrameTime > clockNow) {
-		// 	auto remaining = nextFrameTime - clockNow;
-		// 	auto sleepPart = remaining - std::chrono::milliseconds(2);
-		// 	if (sleepPart > std::chrono::milliseconds(0))
-		// 		std::this_thread::sleep_for(sleepPart);
-		// 	while (clock::now() < nextFrameTime)
-		// 		; // spin-wait for precision
-		// } else {
-		// 	// Fell behind (e.g. slow network) — reset to avoid burst catch-up
-		// 	nextFrameTime = clockNow;
-		// }
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		nextFrameTime += FRAME_INTERVAL;
+		auto clockNow = clock::now();
+		if (nextFrameTime > clockNow) {
+			auto remaining = nextFrameTime - clockNow;
+			auto sleepPart = remaining - std::chrono::milliseconds(2);
+			if (sleepPart > std::chrono::milliseconds(0))
+				std::this_thread::sleep_for(sleepPart);
+			while (clock::now() < nextFrameTime)
+				; // spin-wait for precision
+		} else {
+			// Fell behind (e.g. slow network) — reset to avoid burst catch-up
+			nextFrameTime = clockNow;
+		}
 	}
 }
 
@@ -442,15 +443,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		int clientW = rc.right - rc.left;
 		int clientH = rc.bottom - rc.top;
 
+		// Copy frame out of lock so StretchDIBits doesn't block the worker
 		{
 			std::lock_guard lock(g_frameMutex);
-			SetStretchBltMode(hdc, COLORONCOLOR);
-			StretchDIBits(hdc,
-				0, 0, clientW, clientH,
-				0, 0, FRAME_W, FRAME_H,
-				g_frameFront.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmi),
-				DIB_RGB_COLORS, SRCCOPY);
+			memcpy(g_paintBuffer.data(), g_frameFront.data(), FRAME_BYTES);
 		}
+
+		SetStretchBltMode(hdc, COLORONCOLOR);
+		StretchDIBits(hdc,
+			0, 0, clientW, clientH,
+			0, 0, FRAME_W, FRAME_H,
+			g_paintBuffer.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmi),
+			DIB_RGB_COLORS, SRCCOPY);
 
 		EndPaint(hwnd, &ps);
 		return 0;
