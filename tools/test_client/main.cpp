@@ -119,11 +119,6 @@ static WPARAM MapExtendedKey(WPARAM vk, LPARAM lParam)
 	}
 }
 
-// ── DIB with BI_BITFIELDS for direct ABGR rendering ──────────────────
-struct BitmapInfoBF {
-	BITMAPINFOHEADER bmiHeader;
-	DWORD masks[3]; // R, G, B channel masks
-};
 
 // ── Frame constants (must match Display) ──────────────────────────────
 static constexpr int FRAME_W = 768;
@@ -143,7 +138,7 @@ static constexpr UINT TIMER_MS = 10;
 // ── Globals ───────────────────────────────────────────────────────────
 static SOCKET g_sock = INVALID_SOCKET;
 static uint16_t g_port = 9876;
-static BitmapInfoBF g_bmi{};
+static BITMAPINFOHEADER g_bmiHeader{};
 static std::vector<uint8_t> g_requestBytes;
 static std::vector<uint8_t> g_statsRequestBytes;
 
@@ -453,7 +448,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		StretchDIBits(hdc,
 			0, 0, clientW, clientH,
 			0, 0, FRAME_W, FRAME_H,
-			g_paintBuffer.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmi),
+			g_paintBuffer.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmiHeader),
 			DIB_RGB_COLORS, SRCCOPY);
 
 		EndPaint(hwnd, &ps);
@@ -548,16 +543,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 		return 1;
 	}
 
-	// Set up DIB info: BI_BITFIELDS for direct ABGR rendering (no per-pixel conversion)
-	g_bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-	g_bmi.bmiHeader.biWidth = FRAME_W;
-	g_bmi.bmiHeader.biHeight = -FRAME_H; // top-down
-	g_bmi.bmiHeader.biPlanes = 1;
-	g_bmi.bmiHeader.biBitCount = 32;
-	g_bmi.bmiHeader.biCompression = BI_BITFIELDS;
-	g_bmi.masks[0] = 0x000000FF; // R in low byte
-	g_bmi.masks[1] = 0x0000FF00; // G
-	g_bmi.masks[2] = 0x00FF0000; // B
+	// Set up DIB info: BI_RGB for standard BGRA byte order (server converts)
+	g_bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	g_bmiHeader.biWidth = FRAME_W;
+	g_bmiHeader.biHeight = -FRAME_H; // top-down
+	g_bmiHeader.biPlanes = 1;
+	g_bmiHeader.biBitCount = 32;
+	g_bmiHeader.biCompression = BI_RGB;
 
 	// Pre-encode the frame request (reused every frame)
 	nlohmann::json reqJ = {

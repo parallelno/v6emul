@@ -72,11 +72,13 @@ Standard MessagePack response containing:
 For high-throughput frame streaming, this command returns a **raw binary** response that bypasses MessagePack encoding:
 
 ```
-[4 bytes: payloadLen (uint32_t)] [4 bytes: width] [4 bytes: height] [payloadLen-8 bytes: raw ABGR pixels]
+[4 bytes: payloadLen (uint32_t)] [4 bytes: width] [4 bytes: height] [payloadLen-8 bytes: raw pixels]
 ```
 
 - Frame dimensions: 768 × 312 pixels
-- Pixel format: ABGR (4 bytes per pixel, 32-bit)
+- Pixel format depends on `--frame-format`:
+  - `rgba` (default) — bytes `[R, G, B, A]` per pixel. Native for HTML Canvas `ImageData`, WebGL, and most graphics APIs.
+  - `bgra` — bytes `[B, G, R, A]` per pixel. Native for Windows `BI_RGB` bitmaps (GDI `StretchDIBits`).
 - Total pixel data: 768 × 312 × 4 = 958,464 bytes
 
 ## Hardware Commands

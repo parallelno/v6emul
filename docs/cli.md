@@ -44,6 +44,7 @@ v6emul operates in one of three modes depending on the flags provided:
 |------|------|---------|-------------|
 | `--serve` | flag | — | Start the TCP IPC server |
 | `--speed <speed>` | string | *(normal)* | Execution speed: `1%`, `20%`, `50%`, `100%`, `200%`, `max` |
+| `--frame-format <fmt>` | string | `rgba` | Pixel format for `GET_FRAME_RAW`: `rgba` or `bgra` |
 | `--tcp-port <port>` | int | `9876` | TCP port for the IPC server |
 
 ### Stop Conditions (Test Mode)

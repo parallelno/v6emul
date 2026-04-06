@@ -170,7 +170,7 @@ static void SignalHandler(int)
 	if (g_serverPtr) g_serverPtr->Close();
 }
 
-static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
+static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
 {
 	std::signal(SIGINT, SignalHandler);
 	std::signal(SIGTERM, SignalHandler);
@@ -270,6 +270,17 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port)
 				std::memcpy(rawMsg.data() + 4, &w, 4);
 				std::memcpy(rawMsg.data() + 8, &h, 4);
 				std::memcpy(rawMsg.data() + 12, fb->data(), pixLen);
+
+				// Convert ABGR (ImGui) → ARGB (BGRA byte order) if requested
+				if (_convertBgra) {
+					auto* pixels = reinterpret_cast<uint32_t*>(rawMsg.data() + 12);
+					size_t pixelCount = fb->size();
+					for (size_t i = 0; i < pixelCount; ++i) {
+						uint32_t c = pixels[i];
+						pixels[i] = (c & 0xFF00FF00u) | ((c & 0xFFu) << 16) | ((c >> 16) & 0xFFu);
+					}
+				}
+
 				server.Send(rawMsg);
 			} else {
 				auto errResp = dev::ipc::Encode(
@@ -345,6 +356,7 @@ int main(int argc, char* argv[])
 	bool serve = args.HasFlag("serve", "Start the IPC server mode");
 	auto tcpPort = args.GetInt("tcp-port", "TCP port for IPC server (default: 9876)", false, 9876);
 	auto speed = args.GetString("speed", "Execution speed: 1%, 20%, 50%, 100%, 200%, max", false, "");
+	auto frameFormat = args.GetString("frame-format", "Pixel format for GET_FRAME_RAW: rgba (default), bgra", false, "rgba");
 	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
 
 	if (!args.IsRequirementSatisfied()) return 1;
@@ -369,6 +381,14 @@ int main(int argc, char* argv[])
 
 	if (fddDrive < 0 || fddDrive > 3) {
 		std::cerr << std::format("Error: --fdd-drive must be 0-3, got {}", fddDrive) << std::endl;
+		return 1;
+	}
+
+	bool convertBgra = false;
+	if (frameFormat == "bgra") {
+		convertBgra = true;
+	} else if (frameFormat != "rgba") {
+		std::cerr << std::format("Error: --frame-format must be 'rgba' or 'bgra', got '{}'", frameFormat) << std::endl;
 		return 1;
 	}
 
@@ -430,5 +450,5 @@ int main(int argc, char* argv[])
 	}
 
 	// Server mode
-	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort));
+	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort), convertBgra);
 }
