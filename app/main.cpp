@@ -19,6 +19,61 @@
 
 static constexpr uint8_t TEST_PORT = 0xED;
 
+// ── Frame mode: controls which region of the framebuffer is returned ─
+enum class FrameMode { FULL, BORDERED, BORDERLESS };
+
+struct FrameGeometry {
+	uint32_t width;
+	uint32_t height;
+	int      startLine;
+	int      startPixel;
+};
+
+static constexpr FrameGeometry GetFrameGeometry(FrameMode _mode)
+{
+	switch (_mode) {
+	case FrameMode::BORDERLESS:
+		return { dev::Display::ACTIVE_AREA_W, dev::Display::ACTIVE_AREA_H,
+		         dev::Display::SCAN_ACTIVE_AREA_TOP, dev::Display::BORDER_LEFT };
+	case FrameMode::BORDERED:
+		return { static_cast<uint32_t>(dev::Display::ACTIVE_AREA_W +
+									   dev::Display::BORDER_VISIBLE * 2),
+
+				 static_cast<uint32_t>(dev::Display::ACTIVE_AREA_H +
+									   dev::Display::BORDER_VISIBLE * 2),
+
+		         dev::Display::SCAN_ACTIVE_AREA_TOP - dev::Display::BORDER_VISIBLE,
+		         dev::Display::BORDER_LEFT - dev::Display::BORDER_VISIBLE };
+	default: // FULL
+		return { dev::Display::FRAME_W, dev::Display::FRAME_H, 0, 0 };
+	}
+}
+
+// Copy the selected frame region into _dst. Returns byte count written.
+static size_t CropFrame(const dev::Display::FrameBuffer& _fb, uint8_t* _dst,
+	const FrameGeometry& _geom)
+{
+	const size_t srcStride  = dev::Display::FRAME_W * sizeof(dev::ColorI);
+	const size_t dstStride  = _geom.width * sizeof(dev::ColorI);
+	const size_t pixelBytes = dstStride * _geom.height;
+
+	// Fast path: contiguous rows spanning the full framebuffer width
+	if (_geom.startPixel == 0 && _geom.width == static_cast<uint32_t>(dev::Display::FRAME_W)) {
+		const auto* src = reinterpret_cast<const uint8_t*>(_fb.data())
+		                  + static_cast<size_t>(_geom.startLine) * srcStride;
+		std::memcpy(_dst, src, pixelBytes);
+	} else {
+		// Row-by-row copy (borderless)
+		for (uint32_t row = 0; row < _geom.height; ++row) {
+			const auto* src = reinterpret_cast<const uint8_t*>(_fb.data())
+			                  + static_cast<size_t>(_geom.startLine + row) * srcStride
+			                  + static_cast<size_t>(_geom.startPixel) * sizeof(dev::ColorI);
+			std::memcpy(_dst + row * dstStride, src, dstStride);
+		}
+	}
+	return pixelBytes;
+}
+
 namespace
 {
 	constexpr const char* APP_TITLE = "v6emul - Vector-06C Emulator";
@@ -170,7 +225,7 @@ static void SignalHandler(int)
 	if (g_serverPtr) g_serverPtr->Close();
 }
 
-static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
+static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra, FrameMode _frameMode)
 {
 	std::signal(SIGINT, SignalHandler);
 	std::signal(SIGTERM, SignalHandler);
@@ -238,12 +293,21 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
 			auto* fb = _hw.GetFrame(false);
 			nlohmann::json responseJ;
 			if (fb) {
-				auto* raw = reinterpret_cast<const uint8_t*>(fb->data());
-				size_t len = fb->size() * sizeof(dev::ColorI);
+				const auto geom = GetFrameGeometry(_frameMode);
+				size_t pixLen = static_cast<size_t>(geom.width) * geom.height * sizeof(dev::ColorI);
+				const uint8_t* pixPtr;
+				static std::vector<uint8_t> cropBuf;
+				if (_frameMode == FrameMode::FULL) {
+					pixPtr = reinterpret_cast<const uint8_t*>(fb->data());
+				} else {
+					cropBuf.resize(pixLen);
+					CropFrame(*fb, cropBuf.data(), geom);
+					pixPtr = cropBuf.data();
+				}
 				responseJ = dev::ipc::MakeResponse({
-					{"width", dev::Display::FRAME_W},
-					{"height", dev::Display::FRAME_H},
-					{"pixels", nlohmann::json::binary_t({raw, raw + len})}
+					{"width", geom.width},
+					{"height", geom.height},
+					{"pixels", nlohmann::json::binary_t({pixPtr, pixPtr + pixLen})}
 				});
 			} else {
 				responseJ = dev::ipc::MakeErrorResponse("no frame available");
@@ -258,10 +322,11 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
 		if (cmdInt == dev::ipc::CMD_GET_FRAME_RAW) {
 			auto* fb = _hw.GetFrame(false);
 			if (fb) {
-				size_t pixLen = fb->size() * sizeof(dev::ColorI);
+				const auto geom = GetFrameGeometry(_frameMode);
+				size_t pixLen = static_cast<size_t>(geom.width) * geom.height * sizeof(dev::ColorI);
 				uint32_t payloadLen = static_cast<uint32_t>(8 + pixLen);
-				uint32_t w = dev::Display::FRAME_W;
-				uint32_t h = dev::Display::FRAME_H;
+				uint32_t w = geom.width;
+				uint32_t h = geom.height;
 
 				// Reuse a static buffer to avoid per-frame allocation
 				static std::vector<uint8_t> rawMsg;
@@ -269,12 +334,16 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
 				std::memcpy(rawMsg.data(), &payloadLen, 4);
 				std::memcpy(rawMsg.data() + 4, &w, 4);
 				std::memcpy(rawMsg.data() + 8, &h, 4);
-				std::memcpy(rawMsg.data() + 12, fb->data(), pixLen);
+				if (_frameMode == FrameMode::FULL) {
+					std::memcpy(rawMsg.data() + 12, fb->data(), pixLen);
+				} else {
+					CropFrame(*fb, rawMsg.data() + 12, geom);
+				}
 
 				// Convert ABGR (ImGui) → ARGB (BGRA byte order) if requested
 				if (_convertBgra) {
 					auto* pixels = reinterpret_cast<uint32_t*>(rawMsg.data() + 12);
-					size_t pixelCount = fb->size();
+					size_t pixelCount = static_cast<size_t>(geom.width) * geom.height;
 					for (size_t i = 0; i < pixelCount; ++i) {
 						uint32_t c = pixels[i];
 						pixels[i] = (c & 0xFF00FF00u) | ((c & 0xFFu) << 16) | ((c >> 16) & 0xFFu);
@@ -357,6 +426,7 @@ int main(int argc, char* argv[])
 	auto tcpPort = args.GetInt("tcp-port", "TCP port for IPC server (default: 9876)", false, 9876);
 	auto speed = args.GetString("speed", "Execution speed: 1%, 20%, 50%, 100%, 200%, max", false, "");
 	auto frameFormat = args.GetString("frame-format", "Pixel format for GET_FRAME_RAW: rgba (default), bgra", false, "rgba");
+	auto frameModeStr = args.GetString("frame-mode", "Frame region returned by IPC: full, bordered (default), borderless", false, "bordered");
 	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
 
 	if (!args.IsRequirementSatisfied()) return 1;
@@ -389,6 +459,18 @@ int main(int argc, char* argv[])
 		convertBgra = true;
 	} else if (frameFormat != "rgba") {
 		std::cerr << std::format("Error: --frame-format must be 'rgba' or 'bgra', got '{}'", frameFormat) << std::endl;
+		return 1;
+	}
+
+	FrameMode frameMode = FrameMode::BORDERED;
+	if (frameModeStr == "full") {
+		frameMode = FrameMode::FULL;
+	} else if (frameModeStr == "bordered") {
+		frameMode = FrameMode::BORDERED;
+	} else if (frameModeStr == "borderless") {
+		frameMode = FrameMode::BORDERLESS;
+	} else {
+		std::cerr << std::format("Error: --frame-mode must be 'full', 'bordered', or 'borderless', got '{}'", frameModeStr) << std::endl;
 		return 1;
 	}
 
@@ -450,5 +532,5 @@ int main(int argc, char* argv[])
 	}
 
 	// Server mode
-	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort), convertBgra);
+	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort), convertBgra, frameMode);
 }

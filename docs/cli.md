@@ -45,6 +45,7 @@ v6emul operates in one of three modes depending on the flags provided:
 | `--serve` | flag | — | Start the TCP IPC server |
 | `--speed <speed>` | string | *(normal)* | Execution speed: `1%`, `20%`, `50%`, `100%`, `200%`, `max` |
 | `--frame-format <fmt>` | string | `rgba` | Pixel format for `GET_FRAME_RAW`: `rgba` or `bgra` |
+| `--frame-mode <mode>` | string | `bordered` | Frame region returned by IPC: `full`, `bordered`, `borderless` |
 | `--tcp-port <port>` | int | `9876` | TCP port for the IPC server |
 
 ### Stop Conditions (Test Mode)
@@ -121,6 +122,24 @@ v6emul --boot-rom res/boot/boot.bin --fdd game.fdd --fdd-drive 1 --fdd-autoboot 
 v6emul --rom game.rom --serve --tcp-port 12345
 ```
 
+### Stream borderless frames (active area only, 512×256)
+
+```bash
+v6emul --rom game.rom --serve --frame-mode borderless
+```
+
+### Stream full frames including vsync region (768×312)
+
+```bash
+v6emul --rom game.rom --serve --frame-mode full
+```
+
+### Stream bordered frames (active area + 16px border on each side → 544×288)
+
+```bash
+v6emul --rom game.rom --serve --frame-mode bordered
+```
+
 ## Test Output Format
 
 In test mode, the emulator captures `OUT` instructions to the test port (`0xED`) and prints them to stdout:
@@ -141,3 +160,4 @@ The exit line reports the stop reason (`HALT` or `EXIT`), the program counter, c
 - Boot ROM load failures print an error and exit with code 1.
 - FDD image load failures print an error and exit with code 1.
 - Invalid `--fdd-drive` values (outside 0–3) print an error and exit with code 1.
+- Invalid `--frame-mode` values print an error and exit with code 1.
