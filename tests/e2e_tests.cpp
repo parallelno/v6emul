@@ -178,14 +178,14 @@ struct ServerContext {
 					}
 
 					if (cmdInt == dev::ipc::CMD_GET_FRAME) {
-						auto* fb = hw->GetFrame(false);
+						auto [pixels, region] = hw->GetFrame(false);
 						nlohmann::json responseJ;
-						if (fb) {
-							auto* raw = reinterpret_cast<const uint8_t*>(fb->data());
-							size_t len = fb->size() * sizeof(dev::ColorI);
+						if (pixels) {
+							auto* raw = reinterpret_cast<const uint8_t*>(pixels);
+							size_t len = static_cast<size_t>(region.width) * region.height * sizeof(dev::ColorI);
 							responseJ = dev::ipc::MakeResponse({
-								{"width", dev::Display::FRAME_W},
-								{"height", dev::Display::FRAME_H},
+								{"width", region.width},
+								{"height", region.height},
 								{"pixels", nlohmann::json::binary_t({raw, raw + len})}
 							});
 						} else {

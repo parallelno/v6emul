@@ -19,61 +19,6 @@
 
 static constexpr uint8_t TEST_PORT = 0xED;
 
-// ── Frame mode: controls which region of the framebuffer is returned ─
-enum class FrameMode { FULL, BORDERED, BORDERLESS };
-
-struct FrameGeometry {
-	uint32_t width;
-	uint32_t height;
-	int      startLine;
-	int      startPixel;
-};
-
-static constexpr FrameGeometry GetFrameGeometry(FrameMode _mode)
-{
-	switch (_mode) {
-	case FrameMode::BORDERLESS:
-		return { dev::Display::ACTIVE_AREA_W, dev::Display::ACTIVE_AREA_H,
-		         dev::Display::SCAN_ACTIVE_AREA_TOP, dev::Display::BORDER_LEFT };
-	case FrameMode::BORDERED:
-		return { static_cast<uint32_t>(dev::Display::ACTIVE_AREA_W +
-									   dev::Display::BORDER_VISIBLE * 2),
-
-				 static_cast<uint32_t>(dev::Display::ACTIVE_AREA_H +
-									   dev::Display::BORDER_VISIBLE * 2),
-
-		         dev::Display::SCAN_ACTIVE_AREA_TOP - dev::Display::BORDER_VISIBLE,
-		         dev::Display::BORDER_LEFT - dev::Display::BORDER_VISIBLE };
-	default: // FULL
-		return { dev::Display::FRAME_W, dev::Display::FRAME_H, 0, 0 };
-	}
-}
-
-// Copy the selected frame region into _dst. Returns byte count written.
-static size_t CropFrame(const dev::Display::FrameBuffer& _fb, uint8_t* _dst,
-	const FrameGeometry& _geom)
-{
-	const size_t srcStride  = dev::Display::FRAME_W * sizeof(dev::ColorI);
-	const size_t dstStride  = _geom.width * sizeof(dev::ColorI);
-	const size_t pixelBytes = dstStride * _geom.height;
-
-	// Fast path: contiguous rows spanning the full framebuffer width
-	if (_geom.startPixel == 0 && _geom.width == static_cast<uint32_t>(dev::Display::FRAME_W)) {
-		const auto* src = reinterpret_cast<const uint8_t*>(_fb.data())
-		                  + static_cast<size_t>(_geom.startLine) * srcStride;
-		std::memcpy(_dst, src, pixelBytes);
-	} else {
-		// Row-by-row copy (borderless)
-		for (uint32_t row = 0; row < _geom.height; ++row) {
-			const auto* src = reinterpret_cast<const uint8_t*>(_fb.data())
-			                  + static_cast<size_t>(_geom.startLine + row) * srcStride
-			                  + static_cast<size_t>(_geom.startPixel) * sizeof(dev::ColorI);
-			std::memcpy(_dst + row * dstStride, src, dstStride);
-		}
-	}
-	return pixelBytes;
-}
-
 namespace
 {
 	constexpr const char* APP_TITLE = "v6emul - Vector-06C Emulator";
@@ -225,7 +170,7 @@ static void SignalHandler(int)
 	if (g_serverPtr) g_serverPtr->Close();
 }
 
-static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra, FrameMode _frameMode)
+static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
 {
 	std::signal(SIGINT, SignalHandler);
 	std::signal(SIGTERM, SignalHandler);
@@ -290,24 +235,15 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra, 
 		}
 
 		if (cmdInt == dev::ipc::CMD_GET_FRAME) {
-			auto* fb = _hw.GetFrame(false);
+			auto [pixels, region] = _hw.GetFrame(true);
 			nlohmann::json responseJ;
-			if (fb) {
-				const auto geom = GetFrameGeometry(_frameMode);
-				size_t pixLen = static_cast<size_t>(geom.width) * geom.height * sizeof(dev::ColorI);
-				const uint8_t* pixPtr;
-				static std::vector<uint8_t> cropBuf;
-				if (_frameMode == FrameMode::FULL) {
-					pixPtr = reinterpret_cast<const uint8_t*>(fb->data());
-				} else {
-					cropBuf.resize(pixLen);
-					CropFrame(*fb, cropBuf.data(), geom);
-					pixPtr = cropBuf.data();
-				}
+			if (pixels) {
+				size_t pixLen = static_cast<size_t>(region.width) * region.height * sizeof(dev::ColorI);
+				const auto* raw = reinterpret_cast<const uint8_t*>(pixels);
 				responseJ = dev::ipc::MakeResponse({
-					{"width", geom.width},
-					{"height", geom.height},
-					{"pixels", nlohmann::json::binary_t({pixPtr, pixPtr + pixLen})}
+					{"width", region.width},
+					{"height", region.height},
+					{"pixels", nlohmann::json::binary_t({raw, raw + pixLen})}
 				});
 			} else {
 				responseJ = dev::ipc::MakeErrorResponse("no frame available");
@@ -320,13 +256,12 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra, 
 		// Raw binary frame: [4:payloadLen][4:width][4:height][raw ABGR pixels]
 		// Bypasses json/msgpack for high-throughput frame streaming.
 		if (cmdInt == dev::ipc::CMD_GET_FRAME_RAW) {
-			auto* fb = _hw.GetFrame(false);
-			if (fb) {
-				const auto geom = GetFrameGeometry(_frameMode);
-				size_t pixLen = static_cast<size_t>(geom.width) * geom.height * sizeof(dev::ColorI);
+			auto [pixels, region] = _hw.GetFrame(false);
+			if (pixels) {
+				size_t pixLen = static_cast<size_t>(region.width) * region.height * sizeof(dev::ColorI);
 				uint32_t payloadLen = static_cast<uint32_t>(8 + pixLen);
-				uint32_t w = geom.width;
-				uint32_t h = geom.height;
+				uint32_t w = region.width;
+				uint32_t h = region.height;
 
 				// Reuse a static buffer to avoid per-frame allocation
 				static std::vector<uint8_t> rawMsg;
@@ -334,19 +269,15 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra, 
 				std::memcpy(rawMsg.data(), &payloadLen, 4);
 				std::memcpy(rawMsg.data() + 4, &w, 4);
 				std::memcpy(rawMsg.data() + 8, &h, 4);
-				if (_frameMode == FrameMode::FULL) {
-					std::memcpy(rawMsg.data() + 12, fb->data(), pixLen);
-				} else {
-					CropFrame(*fb, rawMsg.data() + 12, geom);
-				}
+				std::memcpy(rawMsg.data() + 12, pixels, pixLen);
 
 				// Convert ABGR (ImGui) → ARGB (BGRA byte order) if requested
 				if (_convertBgra) {
-					auto* pixels = reinterpret_cast<uint32_t*>(rawMsg.data() + 12);
-					size_t pixelCount = static_cast<size_t>(geom.width) * geom.height;
+					auto* pxls = reinterpret_cast<uint32_t*>(rawMsg.data() + 12);
+					size_t pixelCount = static_cast<size_t>(region.width) * region.height;
 					for (size_t i = 0; i < pixelCount; ++i) {
-						uint32_t c = pixels[i];
-						pixels[i] = (c & 0xFF00FF00u) | ((c & 0xFFu) << 16) | ((c >> 16) & 0xFFu);
+						uint32_t c = pxls[i];
+						pxls[i] = (c & 0xFF00FF00u) | ((c & 0xFFu) << 16) | ((c >> 16) & 0xFFu);
 					}
 				}
 
@@ -462,13 +393,13 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	FrameMode frameMode = FrameMode::BORDERED;
+	dev::Display::FrameMode frameMode = dev::Display::FrameMode::BORDERED;
 	if (frameModeStr == "full") {
-		frameMode = FrameMode::FULL;
+		frameMode = dev::Display::FrameMode::FULL;
 	} else if (frameModeStr == "bordered") {
-		frameMode = FrameMode::BORDERED;
+		frameMode = dev::Display::FrameMode::BORDERED;
 	} else if (frameModeStr == "borderless") {
-		frameMode = FrameMode::BORDERLESS;
+		frameMode = dev::Display::FrameMode::BORDERLESS;
 	} else {
 		std::cerr << std::format("Error: --frame-mode must be 'full', 'bordered', or 'borderless', got '{}'", frameModeStr) << std::endl;
 		return 1;
@@ -476,6 +407,10 @@ int main(int argc, char* argv[])
 
 	// Create hardware (heap-allocated due to ~2MB Memory inside)
 	auto hw = std::make_unique<dev::Hardware>(bootRomPath, "", true);
+
+	// Apply frame mode
+	hw->Request(dev::Hardware::Req::SET_FRAME_MODE,
+		{{"frameMode", static_cast<int>(frameMode)}});
 
 	// Apply speed setting if provided
 	if (!speed.empty()) {
@@ -532,5 +467,5 @@ int main(int argc, char* argv[])
 	}
 
 	// Server mode
-	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort), convertBgra, frameMode);
+	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort), convertBgra);
 }

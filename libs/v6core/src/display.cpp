@@ -258,13 +258,38 @@ void dev::Display::FillActiveArea512(const int _rasterizedPixels)
 
 bool dev::Display::IsIRQ() { return m_state.update.irq; }
 
+// Copy the selected frame region into _dst. Returns byte count written.
+size_t dev::Display::CropFrame(const FrameBuffer& _source, dev::ColorI* _dst,
+		const FrameModeRegion& _region)
+{
+	size_t srcOffset = _region.offsetY * FRAME_W + _region.offsetX;
+	size_t dstOffset = 0;
+	for (uint32_t y = 0; y < _region.height; y++)
+	{
+		memcpy(&_dst[dstOffset], &_source[srcOffset], _region.width * sizeof(ColorI));
+		dstOffset += _region.width;
+		srcOffset += FRAME_W;
+	}
+
+	return dstOffset * sizeof(ColorI);
+}
+
 auto dev::Display::GetFrame(const bool _vsync)
-->const FrameBuffer*
+-> std::pair<const FrameBuffer*, FrameModeRegion>
 {
 	std::unique_lock<std::mutex> mlock(m_backBufferMutex);
-	m_gpuBuffer = _vsync ? m_backBuffer : m_frameBuffer;
+	const FrameBuffer& sourceP = _vsync ? m_backBuffer : m_frameBuffer;
+	if (m_frameMode == FrameMode::FULL) {
+		m_gpuBuffer = sourceP;
+	}
+	else if (m_frameMode == FrameMode::BORDERED) {
+		CropFrame(sourceP, m_gpuBuffer.data(), frame_mode_regions[static_cast<int>(FrameMode::BORDERED)]);
+	}
+	else if (m_frameMode == FrameMode::BORDERLESS) {
+		CropFrame(sourceP, m_gpuBuffer.data(), frame_mode_regions[static_cast<int>(FrameMode::BORDERLESS)]);
+	}
 
-	return &m_gpuBuffer;
+	return { &m_gpuBuffer, frame_mode_regions[static_cast<int>(m_frameMode)] };
 }
 
 // Vector color format: uint8_t BBGGGRRR

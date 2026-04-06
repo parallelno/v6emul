@@ -62,7 +62,8 @@ namespace dev
 		static constexpr int BORDER_RIGHT = BORDER_LEFT;
 		static constexpr int BORDER_TOP = SCAN_ACTIVE_AREA_TOP;
 		static constexpr int BORDER_BOTTOM = SCAN_VBLANK_BOTTOM;
-		// border visible on the screen in pxls in 256 mode
+		// visible border on the screen in pxls in 256 mode
+		// in 512 mode the horizontal vertical twice wider (32 pxls)
 		static constexpr int BORDER_VISIBLE = 16;
 		// the amount of rasterized pxls every 4 cpu cycles in MODE_512
 		static constexpr int RASTERIZED_PXLS_MAX = 16;
@@ -81,6 +82,26 @@ namespace dev
 		static constexpr int FULL_PALETTE_LEN = 256;
 
 		using FrameBuffer = std::array <ColorI, FRAME_LEN>;
+
+		enum class FrameMode : int { FULL = 0, BORDERED, BORDERLESS };
+
+		struct FrameModeRegion
+		{
+			int width;
+			int height;
+			int offsetX;
+			int offsetY;
+		};
+		static constexpr int FRAME_FULL_LEN = FRAME_LEN;
+		static constexpr int FRAME_BORDERED_LEN = (ACTIVE_AREA_W + BORDER_VISIBLE * 4) * (ACTIVE_AREA_H + BORDER_VISIBLE * 2);
+		static constexpr int FRAME_BORDERLESS_LEN = ACTIVE_AREA_W * ACTIVE_AREA_H;
+
+		static constexpr FrameModeRegion frame_mode_regions[] = {
+			{ FRAME_W, FRAME_H, 0, 0 },
+			{ ACTIVE_AREA_W + BORDER_VISIBLE * 2, ACTIVE_AREA_H + BORDER_VISIBLE * 2,
+			                         BORDER_LEFT - BORDER_VISIBLE, BORDER_TOP - BORDER_VISIBLE },
+			{ ACTIVE_AREA_W, ACTIVE_AREA_H, BORDER_LEFT, BORDER_TOP }
+		};
 
 		enum class BufferType { FRAME_BUFFER, BACK_BUFFER, GPU_BUFFER};
 		using BuffUpdateFunc = std::function<void(const BufferType _bufferType)>;
@@ -111,8 +132,10 @@ namespace dev
 
 		FrameBuffer m_frameBuffer;	// rasterizer draws here
 		FrameBuffer m_backBuffer;	// a buffer to simulate VSYNC
-		FrameBuffer m_gpuBuffer;	// temp buffer for loading on GPU
+		FrameBuffer m_gpuBuffer;	// buffer for outside consumers
+
 		std::mutex m_backBufferMutex;
+		FrameMode m_frameMode = FrameMode::BORDERED;
 
 		int m_borderLeft = BORDER_LEFT;
 		int m_irqCommitPxl = IRQ_COMMIT_PXL;
@@ -126,7 +149,7 @@ namespace dev
 		void Reset();
 		void Rasterize();
 		bool IsIRQ();
-		auto GetFrame(const bool _vsync) ->const FrameBuffer*;
+		auto GetFrame(const bool _vsync) -> std::pair<const FrameBuffer*, FrameModeRegion>;
 		inline auto GetFrameNum() const -> uint64_t { return m_state.update.frameNum; };
 		inline int GetRasterLine() const { return m_state.update.framebufferIdx / FRAME_W; };
 		inline int GetRasterPixel() const { return m_state.update.framebufferIdx % FRAME_W; };
@@ -139,6 +162,8 @@ namespace dev
 		void SetBorderLeft(const int _borderLeft) { m_borderLeft = _borderLeft; };
 		auto GetIrqCommitPxl() const -> int { return m_irqCommitPxl; };
 		void SetIrqCommitPxl(const int _irqCommitPxl) { m_irqCommitPxl = _irqCommitPxl; };
+		auto GetFrameMode() const -> FrameMode { return m_frameMode; };
+		void SetFrameMode(FrameMode _mode) { m_frameMode = _mode; };
 
 	private:
 		uint32_t BytesToColorIdxs();
@@ -155,5 +180,6 @@ namespace dev
 		void FillBorderPortHandling(const int _rasterizedPixels = RASTERIZED_PXLS_MAX);
 		void BuffUpdate(BufferType _buffer);
 		void FrameBuffUpdate();
+		size_t CropFrame(const FrameBuffer& _source, dev::ColorI* _dst, const FrameModeRegion& _region);
 	};
 }

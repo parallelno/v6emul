@@ -74,7 +74,8 @@ namespace dev
 			const Req _req, const nlohmann::json& _dataJ = {})
 			-> Result <nlohmann::json>;
 
-		auto GetFrame(const bool _vsync) -> const Display::FrameBuffer*;
+		auto GetFrame(const bool _vsync)
+			-> std::pair<const dev::Display::FrameBuffer*, dev::Display::FrameModeRegion>;
 		auto GetRam() const -> const Memory::Ram*;
 		auto GetCpuState() -> const CpuI8080::State& { return m_cpu.GetState(); }
 		auto GetMemState() -> const Memory::State& { return m_memory.GetState(); }

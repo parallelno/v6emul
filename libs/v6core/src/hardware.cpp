@@ -296,6 +296,13 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		break;
 	}
 
+	case Req::SET_FRAME_MODE:
+	{
+		m_display.SetFrameMode(
+			static_cast<Display::FrameMode>(dataJ["frameMode"].get<int>()));
+		break;
+	}
+
 	case Req::GET_IO_DISPLAY_MODE:
 		out = {
 			{"data", m_io.GetDisplayMode()},
@@ -734,7 +741,7 @@ auto dev::Hardware::GetRam() const
 
 // UI thread. Non-blocking reading.
 auto dev::Hardware::GetFrame(const bool _vsync)
-->const Display::FrameBuffer*
+-> std::pair<const dev::Display::FrameBuffer*, dev::Display::FrameModeRegion>
 {
 	return m_display.GetFrame(_vsync);
 }
