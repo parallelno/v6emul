@@ -64,7 +64,7 @@ endif()
 find_program(
     V6ASM_EXECUTABLE
     NAMES ${V6ASM_NAMES}
-    PATHS ${CMAKE_SOURCE_DIR}/tools/v6asm
+    PATHS ${CMAKE_SOURCE_DIR}/tests/tools/v6asm
     NO_DEFAULT_PATH
 )
 

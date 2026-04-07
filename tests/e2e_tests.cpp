@@ -289,13 +289,13 @@ static void test_e2e_load_run_fetch_frame()
 		ASSERT_TRUE(resp[dev::ipc::FIELD_OK].get<bool>());
 
 		auto data = resp[dev::ipc::FIELD_DATA];
-		ASSERT_EQ(data["width"].get<int>(), dev::Display::FRAME_W);
-		ASSERT_EQ(data["height"].get<int>(), dev::Display::FRAME_H);
+		constexpr auto& bordered = dev::Display::frame_mode_regions[static_cast<int>(dev::Display::FrameMode::BORDERED)];
+		ASSERT_EQ(data["width"].get<int>(), bordered.width);
+		ASSERT_EQ(data["height"].get<int>(), bordered.height);
 
 		// Pixels arrive as binary_t (raw ABGR bytes)
 		auto pixels = data["pixels"].get<nlohmann::json::binary_t>();
-		size_t expectedSize = static_cast<size_t>(dev::Display::FRAME_W)
-							  * dev::Display::FRAME_H * sizeof(dev::ColorI);
+		size_t expectedSize = bordered.GetByteLen();
 		ASSERT_EQ(pixels.size(), expectedSize);
 
 		// Verify the frame is not all zeros — at least the border region

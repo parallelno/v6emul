@@ -132,5 +132,9 @@ libs/
   v6utils/              Shared utilities (types, queue, args parser, file I/O).
 tools/
   test_client/          Win32 GDI display client.
-tests/                  Unit, integration, e2e, and golden tests.
+tests/
+  tools/
+    v6asm/              Assembler binary used by ASM unit tests.
+  unit_tests/           Assembly source files and expected.json for ASM tests.
+  golden/               Expected stdout files for golden tests.
 ```
