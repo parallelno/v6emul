@@ -301,7 +301,15 @@ static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
 			break;
 		}
 
-		auto result = _hw.Request(req, dataJ);
+		decltype(_hw.Request(req, dataJ)) result;
+		try {
+			result = _hw.Request(req, dataJ);
+		} catch (const std::exception& e) {
+			auto errResp = dev::ipc::Encode(
+				dev::ipc::MakeErrorResponse(std::format("dispatch error: {}", e.what())));
+			server.Send(errResp);
+			continue;
+		}
 
 		nlohmann::json responseJ;
 		if (result) {

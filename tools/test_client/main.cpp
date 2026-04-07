@@ -120,12 +120,13 @@ static WPARAM MapExtendedKey(WPARAM vk, LPARAM lParam)
 }
 
 
-// ── Frame constants (must match Display) ──────────────────────────────
-static constexpr int FRAME_W = 768;
-static constexpr int FRAME_H = 312;
-static constexpr int FRAME_PIXELS = FRAME_W * FRAME_H;
-static constexpr int FRAME_BYTES = FRAME_PIXELS * 4;
-// Scale factor for the window (768×312 is quite wide and short)
+// ── Frame constants ───────────────────────────────────────────────────
+// Maximum frame size (full mode); actual size is dynamic from server.
+static constexpr int MAX_FRAME_W = 768;
+static constexpr int MAX_FRAME_H = 312;
+static constexpr int MAX_FRAME_PIXELS = MAX_FRAME_W * MAX_FRAME_H;
+static constexpr int MAX_FRAME_BYTES = MAX_FRAME_PIXELS * 4;
+// Scale factor for the window
 static constexpr int SCALE = 1;
 
 // 50 fps
@@ -142,14 +143,18 @@ static BITMAPINFOHEADER g_bmiHeader{};
 static std::vector<uint8_t> g_requestBytes;
 static std::vector<uint8_t> g_statsRequestBytes;
 
+// Current frame dimensions (set by worker thread from server response)
+static std::atomic<int> g_frameW{0};
+static std::atomic<int> g_frameH{0};
+
 // Double-buffered frames: worker writes to back, UI reads from front
-static std::vector<uint32_t> g_frameFront(FRAME_PIXELS, 0);
-static std::vector<uint32_t> g_frameBack(FRAME_PIXELS, 0);
+static std::vector<uint32_t> g_frameFront(MAX_FRAME_PIXELS, 0);
+static std::vector<uint32_t> g_frameBack(MAX_FRAME_PIXELS, 0);
 static std::mutex g_frameMutex;
 static std::atomic<bool> g_frameReady{false};
 
 // Paint buffer: UI thread copies g_frameFront here under lock, then paints without lock
-static std::vector<uint32_t> g_paintBuffer(FRAME_PIXELS, 0);
+static std::vector<uint32_t> g_paintBuffer(MAX_FRAME_PIXELS, 0);
 
 // Stats
 static std::atomic<int> g_recvCount{0};
@@ -277,7 +282,9 @@ static void WorkerThread()
 
 		if (g_testLocal) {
 			// ── Diagnostic: generate a solid-color frame locally ──
-			memset(g_frameBack.data(), rand() & 0xFF, FRAME_BYTES);
+			g_frameW.store(MAX_FRAME_W);
+			g_frameH.store(MAX_FRAME_H);
+			memset(g_frameBack.data(), rand() & 0xFF, MAX_FRAME_BYTES);
 
 			{
 				std::lock_guard lock(g_frameMutex);
@@ -358,13 +365,20 @@ static void WorkerThread()
 		if (!RecvExact(&height, 4)) { Disconnect(); continue; }
 
 		size_t pixelBytes = payloadLen - 8;
-		if (width != FRAME_W || height != FRAME_H || pixelBytes != FRAME_BYTES) {
+		if (width == 0 || height == 0
+			|| width > static_cast<uint32_t>(MAX_FRAME_W)
+			|| height > static_cast<uint32_t>(MAX_FRAME_H)
+			|| pixelBytes != static_cast<size_t>(width) * height * 4) {
 			Disconnect();
 			continue;
 		}
 
 		// Receive directly into back buffer
 		if (!RecvExact(g_frameBack.data(), pixelBytes)) { Disconnect(); continue; }
+
+		// Update dynamic frame dimensions
+		g_frameW.store(static_cast<int>(width));
+		g_frameH.store(static_cast<int>(height));
 
 		// Swap to front under lock
 		{
@@ -421,7 +435,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 				g_lastFpsTick = now;
 
 				auto title = std::format(L"v6emul test client  |  {}x{}  |  {} fps  |  speed {}%  |  {}",
-					FRAME_W, FRAME_H, g_fps, g_speedPercent.load(),
+					g_frameW.load(), g_frameH.load(), g_fps, g_speedPercent.load(),
 					g_connected.load() ? L"connected" : L"disconnected");
 				SetWindowTextW(hwnd, title.c_str());
 			}
@@ -438,16 +452,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 		int clientW = rc.right - rc.left;
 		int clientH = rc.bottom - rc.top;
 
+		int fw = g_frameW.load();
+		int fh = g_frameH.load();
+		if (fw <= 0 || fh <= 0) { EndPaint(hwnd, &ps); return 0; }
+
 		// Copy frame out of lock so StretchDIBits doesn't block the worker
+		size_t copyBytes = static_cast<size_t>(fw) * fh * 4;
 		{
 			std::lock_guard lock(g_frameMutex);
-			memcpy(g_paintBuffer.data(), g_frameFront.data(), FRAME_BYTES);
+			memcpy(g_paintBuffer.data(), g_frameFront.data(), copyBytes);
 		}
+
+		// Update bitmap header for current frame dimensions
+		g_bmiHeader.biWidth = fw;
+		g_bmiHeader.biHeight = -fh;
 
 		SetStretchBltMode(hdc, COLORONCOLOR);
 		StretchDIBits(hdc,
 			0, 0, clientW, clientH,
-			0, 0, FRAME_W, FRAME_H,
+			0, 0, fw, fh,
 			g_paintBuffer.data(), reinterpret_cast<const BITMAPINFO*>(&g_bmiHeader),
 			DIB_RGB_COLORS, SRCCOPY);
 
@@ -545,8 +568,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 
 	// Set up DIB info: BI_RGB for standard BGRA byte order (server converts)
 	g_bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-	g_bmiHeader.biWidth = FRAME_W;
-	g_bmiHeader.biHeight = -FRAME_H; // top-down
+	g_bmiHeader.biWidth = MAX_FRAME_W;
+	g_bmiHeader.biHeight = -MAX_FRAME_H; // top-down
 	g_bmiHeader.biPlanes = 1;
 	g_bmiHeader.biBitCount = 32;
 	g_bmiHeader.biCompression = BI_RGB;
@@ -579,7 +602,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 	RegisterClassExW(&wc);
 
 	// Calculate window size for desired client area
-	RECT winRect = {0, 0, FRAME_W * SCALE, FRAME_H * SCALE};
+	RECT winRect = {0, 0, MAX_FRAME_W * SCALE, MAX_FRAME_H * SCALE};
 	AdjustWindowRect(&winRect, WS_OVERLAPPEDWINDOW, FALSE);
 
 	HWND hwnd = CreateWindowExW(0, L"V6TestClient",
