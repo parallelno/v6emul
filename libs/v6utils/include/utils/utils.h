@@ -209,10 +209,10 @@ constexpr bool is_defined<T, decltype(typeid(T), void())> = true;
 	// FILES
 	//
 	//--------------------------------------------------------------
-	inline bool IsFileExist(const std::string& _path)
-	{
-		return std::filesystem::exists(_path);
-	}
+
+	auto ResolvePath(const std::string& _path) -> std::string;
+
+	bool IsFileExist(const std::string& _path);
 
 	auto LoadTextFile(const std::string& _path) ->std::string;
 

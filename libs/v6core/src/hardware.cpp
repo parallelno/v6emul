@@ -303,6 +303,13 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		break;
 	}
 
+	case Req::SET_COLOR_FORMAT:
+	{
+		m_display.SetColorFormat(
+			static_cast<Display::ColorFormat>(dataJ["colorFormat"].get<int>()));
+		break;
+	}
+
 	case Req::GET_IO_DISPLAY_MODE:
 		out = {
 			{"data", m_io.GetDisplayMode()},

@@ -77,12 +77,13 @@ namespace dev
 		static constexpr int IRQ_COMMIT_PXL = 112;
 		static constexpr int SCROLL_COMMIT_PXL = BORDER_LEFT + 3;
 		// vertical scrolling, 0xff - no scroll
-		static constexpr int SCROLL_DEFAULT = 0xff;
+		static constexpr uint8_t SCROLL_DEFAULT = 0xff;
 
 		static constexpr int FULL_PALETTE_LEN = 256;
 
 		using FrameBuffer = std::array <ColorI, FRAME_LEN>;
 
+		enum class ColorFormat : uint8_t { ABGR = 0, ARGB };
 		enum class FrameMode : int { FULL = 0, BORDERED, BORDERLESS };
 
 		struct FrameModeRegion
@@ -91,6 +92,7 @@ namespace dev
 			int height;
 			int offsetX;
 			int offsetY;
+			size_t GetByteLen() const { return static_cast<size_t>(width) * height * sizeof(ColorI); }
 		};
 		static constexpr int FRAME_FULL_LEN = FRAME_LEN;
 		static constexpr int FRAME_BORDERED_LEN = (ACTIVE_AREA_W + BORDER_VISIBLE * 4) * (ACTIVE_AREA_H + BORDER_VISIBLE * 2);
@@ -133,6 +135,8 @@ namespace dev
 		FrameBuffer m_frameBuffer;	// rasterizer draws here
 		FrameBuffer m_backBuffer;	// a buffer to simulate VSYNC
 		FrameBuffer m_gpuBuffer;	// buffer for outside consumers
+		// the color format of the output frame buffer (ARGB or ABGR)
+		ColorFormat m_colorFormat = ColorFormat::ARGB;
 
 		std::mutex m_backBufferMutex;
 		FrameMode m_frameMode = FrameMode::BORDERED;
@@ -163,7 +167,9 @@ namespace dev
 		auto GetIrqCommitPxl() const -> int { return m_irqCommitPxl; };
 		void SetIrqCommitPxl(const int _irqCommitPxl) { m_irqCommitPxl = _irqCommitPxl; };
 		auto GetFrameMode() const -> FrameMode { return m_frameMode; };
-		void SetFrameMode(FrameMode _mode) { m_frameMode = _mode; };
+		void SetFrameMode(const FrameMode _mode) { m_frameMode = _mode; };
+		auto GetColorFormat() const -> ColorFormat { return m_colorFormat; };
+		void SetColorFormat(const ColorFormat _format) { m_colorFormat = _format; };
 
 	private:
 		uint32_t BytesToColorIdxs();
@@ -178,7 +184,7 @@ namespace dev
 		void RasterizeBorder(const int _rasterizedPixels);
 		void FillBorder(const int _rasterizedPixels = RASTERIZED_PXLS_MAX);
 		void FillBorderPortHandling(const int _rasterizedPixels = RASTERIZED_PXLS_MAX);
-		void BuffUpdate(BufferType _buffer);
+		void BuffUpdate(const BufferType _buffer);
 		void FrameBuffUpdate();
 		size_t CropFrame(const FrameBuffer& _source, dev::ColorI* _dst, const FrameModeRegion& _region);
 	};

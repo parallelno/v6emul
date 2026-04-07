@@ -4,43 +4,26 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
-#include <atomic>
-#include <csignal>
 
 #include "core/hardware.h"
-#include "core/memory.h"
 #include "core/fdd_consts.h"
+#include "core/display.h"
 #include "utils/utils.h"
 #include "utils/args_parser.h"
-#include "ipc/transport.h"
-#include "ipc/protocol.h"
-#include "ipc/commands.h"
 #include "v6emul_version.h"
 
-static constexpr uint8_t TEST_PORT = 0xED;
+#include "server_mode.h"
+#include "test_mode.h"
 
 namespace
 {
 	constexpr const char* APP_TITLE = "v6emul - Vector-06C Emulator";
 	constexpr const char* APP_COPYRIGHT = "(c) Aleksandr Fedotovskikh <mailforfriend@gmail.com>";
 
-	auto GetVersionString() -> std::string
-	{
-		return V6EMUL_VERSION;
-	}
-
-	auto GetCliDescription() -> std::string
-	{
-		return std::format(
-			"Command-line emulator for the Vector-06C Soviet PC, version {}\n{}",
-			GetVersionString(),
-			APP_COPYRIGHT);
-	}
-
-	void PrintTextBlock(const std::string& text)
-	{
-		std::cout << text << "\n\n";
-	}
+	#define APP_HEADER \
+		"Command-line emulator for the Vector-06C Soviet PC, version " \
+		V6EMUL_VERSION "\n" \
+		"(c) Aleksandr Fedotovskikh <mailforfriend@gmail.com>"
 
 	auto CanLoadStartupFile(const std::string& path) -> bool
 	{
@@ -56,296 +39,14 @@ namespace
 	}
 }
 
-// ── Test mode: load ROM, run headless, print results ─────────────────
-static int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
-	int _loadAddr, bool _haltExit, int _runFrames, int _runCycles,
-	bool _dumpCpu, bool _dumpMemory, int _dumpRamdisk)
-{
-	// Load ROM file
-	std::vector<uint8_t> romData;
-	if (!_romPath.empty()) {
-		auto res = dev::LoadFile(_romPath);
-		if (!res) {
-			std::cerr << std::format("Error: failed to load ROM file: {}", _romPath) << std::endl;
-			return 1;
-		}
-		romData = std::move(*res);
-	}
-
-	// Set up test port output callback
-	_hw.SetDebugPortOutCallback([](uint8_t port, uint8_t value) {
-		std::cout << std::format("TEST_OUT port=0x{:02X} value=0x{:02X}", port, value) << std::endl;
-	});
-
-	// Load ROM data into RAM
-	if (!romData.empty()) {
-		nlohmann::json setMemJ = {
-			{"addr", _loadAddr},
-			{"data", romData}
-		};
-		_hw.Request(dev::Hardware::Req::SET_MEM, setMemJ);
-
-		// Restart into RAM execution after loading a test ROM image.
-		_hw.Request(dev::Hardware::Req::RESTART);
-	}
-
-	// Run headless with stop conditions
-	nlohmann::json headlessJ = {
-		{"haltExit", _haltExit},
-		{"maxFrames", static_cast<uint64_t>(_runFrames)},
-		{"maxCycles", static_cast<uint64_t>(_runCycles)}
-	};
-	auto result = _hw.Request(dev::Hardware::Req::RUN_HEADLESS, headlessJ);
-
-	if (!result) {
-		std::cerr << "Error: headless run failed" << std::endl;
-		return 1;
-	}
-
-	auto resJ = *result;
-	auto pc = resJ["pc"].get<uint16_t>();
-	auto cc = resJ["cc"].get<uint64_t>();
-	auto frames = resJ["frames"].get<uint64_t>();
-	auto halted = resJ["halted"].get<bool>();
-
-	if (halted) {
-		std::cout << std::format("HALT at PC=0x{:04X} after {} cpu_cycles {} frames", pc, cc, frames) << std::endl;
-	} else {
-		std::cout << std::format("EXIT at PC=0x{:04X} after {} cpu_cycles {} frames", pc, cc, frames) << std::endl;
-	}
-
-	if (_dumpCpu) {
-		auto af = resJ["af"].get<uint16_t>();
-		auto bc = resJ["bc"].get<uint16_t>();
-		auto de = resJ["de"].get<uint16_t>();
-		auto hl = resJ["hl"].get<uint16_t>();
-		auto sp = resJ["sp"].get<uint16_t>();
-
-		std::cout << std::format("CPU: A={:02X} F={:02X} B={:02X} C={:02X} D={:02X} E={:02X} H={:02X} L={:02X}",
-			af >> 8, af & 0xFF, bc >> 8, bc & 0xFF, de >> 8, de & 0xFF, hl >> 8, hl & 0xFF) << std::endl;
-		std::cout << std::format("     PC={:04X} SP={:04X} CC={}", pc, sp, cc) << std::endl;
-	}
-
-	if (_dumpMemory) {
-		auto ram = _hw.GetRam();
-		if (ram) {
-			std::cout << "MEMORY:" << std::endl;
-			for (int addr = 0; addr < 0x10000; addr += 16) {
-				std::cout << std::format("{:04X}:", addr);
-				for (int j = 0; j < 16; j++) {
-					std::cout << std::format(" {:02X}", (*ram)[addr + j]);
-				}
-				std::cout << std::endl;
-			}
-		}
-	}
-
-	if (_dumpRamdisk >= 0 && _dumpRamdisk < static_cast<int>(dev::Memory::RAM_DISK_MAX)) {
-		auto ram = _hw.GetRam();
-		if (ram) {
-			size_t base = dev::Memory::MEMORY_MAIN_LEN
-				+ static_cast<size_t>(_dumpRamdisk) * dev::Memory::MEMORY_RAMDISK_LEN;
-			std::cout << std::format("RAMDISK {}:", _dumpRamdisk) << std::endl;
-			for (size_t offset = 0; offset < dev::Memory::MEMORY_RAMDISK_LEN; offset += 16) {
-				std::cout << std::format("{:06X}:", offset);
-				for (int j = 0; j < 16; j++) {
-					std::cout << std::format(" {:02X}", (*ram)[base + offset + j]);
-				}
-				std::cout << std::endl;
-			}
-		}
-	}
-
-	return 0;
-}
-
-// ── IPC server mode: TCP recv loop → Hardware::Request() → response ──
-static std::atomic<bool> g_shutdown{false};
-static dev::ipc::Transport* g_serverPtr = nullptr;
-
-static void SignalHandler(int)
-{
-	g_shutdown.store(true);
-	// Close the server sockets to unblock accept()/recv()
-	if (g_serverPtr) g_serverPtr->Close();
-}
-
-static int RunServerMode(dev::Hardware& _hw, uint16_t _port, bool _convertBgra)
-{
-	std::signal(SIGINT, SignalHandler);
-	std::signal(SIGTERM, SignalHandler);
-
-	dev::ipc::Transport server;
-	g_serverPtr = &server;
-
-	if (!server.Listen(_port)) {
-		std::cerr << std::format("Error: failed to listen on port {}", _port) << std::endl;
-		return 1;
-	}
-
-	std::cout << std::format("IPC server listening on 127.0.0.1:{} (Ctrl+C to stop)", server.GetPort()) << std::endl;
-
-	// Start emulation in RUN state
-	_hw.Request(dev::Hardware::Req::RUN);
-
-	while (!g_shutdown.load()) {
-		if (!server.IsClientConnected()) {
-			std::cout << "Waiting for client..." << std::endl;
-			if (!server.AcceptClient()) {
-				if (g_shutdown.load()) break;
-				std::cerr << "Error: failed to accept client" << std::endl;
-				continue;
-			}
-			std::cout << "Client connected" << std::endl;
-		}
-
-		// Receive one message
-		auto payload = server.Recv();
-		if (payload.empty()) {
-			if (g_shutdown.load()) break;
-			std::cout << "Client disconnected" << std::endl;
-			server.Close();
-			// Re-listen for next client
-			if (!server.Listen(_port)) {
-				std::cerr << "Error: failed to re-listen" << std::endl;
-				return 1;
-			}
-			continue;
-		}
-
-		// Decode request
-		nlohmann::json requestJ;
-		try {
-			requestJ = dev::ipc::Decode(payload);
-		} catch (const std::exception& e) {
-			auto errResp = dev::ipc::Encode(
-				dev::ipc::MakeErrorResponse(std::format("decode error: {}", e.what())));
-			server.Send(errResp);
-			continue;
-		}
-
-		int cmdInt = requestJ.value(dev::ipc::FIELD_CMD, 0);
-		auto dataJ = requestJ.value(dev::ipc::FIELD_DATA, nlohmann::json{});
-
-		// Handle pseudo-commands
-		if (cmdInt == dev::ipc::CMD_PING) {
-			auto resp = dev::ipc::Encode(dev::ipc::MakeResponse({{"pong", true}}));
-			server.Send(resp);
-			continue;
-		}
-
-		if (cmdInt == dev::ipc::CMD_GET_FRAME) {
-			auto [pixels, region] = _hw.GetFrame(true);
-			nlohmann::json responseJ;
-			if (pixels) {
-				size_t pixLen = static_cast<size_t>(region.width) * region.height * sizeof(dev::ColorI);
-				const auto* raw = reinterpret_cast<const uint8_t*>(pixels);
-				responseJ = dev::ipc::MakeResponse({
-					{"width", region.width},
-					{"height", region.height},
-					{"pixels", nlohmann::json::binary_t({raw, raw + pixLen})}
-				});
-			} else {
-				responseJ = dev::ipc::MakeErrorResponse("no frame available");
-			}
-			auto respBytes = dev::ipc::Encode(responseJ);
-			server.Send(respBytes);
-			continue;
-		}
-
-		// Raw binary frame: [4:payloadLen][4:width][4:height][raw ABGR pixels]
-		// Bypasses json/msgpack for high-throughput frame streaming.
-		if (cmdInt == dev::ipc::CMD_GET_FRAME_RAW) {
-			auto [pixels, region] = _hw.GetFrame(false);
-			if (pixels) {
-				size_t pixLen = static_cast<size_t>(region.width) * region.height * sizeof(dev::ColorI);
-				uint32_t payloadLen = static_cast<uint32_t>(8 + pixLen);
-				uint32_t w = region.width;
-				uint32_t h = region.height;
-
-				// Reuse a static buffer to avoid per-frame allocation
-				static std::vector<uint8_t> rawMsg;
-				rawMsg.resize(4 + 8 + pixLen);
-				std::memcpy(rawMsg.data(), &payloadLen, 4);
-				std::memcpy(rawMsg.data() + 4, &w, 4);
-				std::memcpy(rawMsg.data() + 8, &h, 4);
-				std::memcpy(rawMsg.data() + 12, pixels, pixLen);
-
-				// Convert ABGR (ImGui) → ARGB (BGRA byte order) if requested
-				if (_convertBgra) {
-					auto* pxls = reinterpret_cast<uint32_t*>(rawMsg.data() + 12);
-					size_t pixelCount = static_cast<size_t>(region.width) * region.height;
-					for (size_t i = 0; i < pixelCount; ++i) {
-						uint32_t c = pxls[i];
-						pxls[i] = (c & 0xFF00FF00u) | ((c & 0xFFu) << 16) | ((c >> 16) & 0xFFu);
-					}
-				}
-
-				server.Send(rawMsg);
-			} else {
-				auto errResp = dev::ipc::Encode(
-					dev::ipc::MakeErrorResponse("no frame available"));
-				server.Send(errResp);
-			}
-			continue;
-		}
-
-		// Dispatch to Hardware::Request()
-		auto req = static_cast<dev::Hardware::Req>(cmdInt);
-
-		// EXIT command: respond, then shut down
-		if (req == dev::Hardware::Req::EXIT) {
-			auto resp = dev::ipc::Encode(dev::ipc::MakeResponse({{"exiting", true}}));
-			server.Send(resp);
-			_hw.Request(dev::Hardware::Req::EXIT);
-			break;
-		}
-
-		decltype(_hw.Request(req, dataJ)) result;
-		try {
-			result = _hw.Request(req, dataJ);
-		} catch (const std::exception& e) {
-			auto errResp = dev::ipc::Encode(
-				dev::ipc::MakeErrorResponse(std::format("dispatch error: {}", e.what())));
-			server.Send(errResp);
-			continue;
-		}
-
-		nlohmann::json responseJ;
-		if (result) {
-			responseJ = dev::ipc::MakeResponse(*result);
-		} else {
-			responseJ = dev::ipc::MakeErrorResponse("request failed");
-		}
-
-		auto respBytes = dev::ipc::Encode(responseJ);
-		if (!server.Send(respBytes)) {
-			std::cout << "Client disconnected during send" << std::endl;
-			server.Close();
-			if (!server.Listen(_port)) {
-				std::cerr << "Error: failed to re-listen" << std::endl;
-				return 1;
-			}
-		}
-	}
-
-	server.Close();
-	g_serverPtr = nullptr;
-	if (g_shutdown.load()) {
-		std::cout << "\nShutting down..." << std::endl;
-		_hw.Request(dev::Hardware::Req::EXIT);
-	}
-	return 0;
-}
-
 // ── Entry point ──────────────────────────────────────────────────────
 int main(int argc, char* argv[])
 {
-	dev::ArgsParser args(argc, argv, GetCliDescription());
+	dev::ArgsParser args(argc, argv, APP_HEADER);
 
 	// Check for --version early
 	if (args.HasFlag("version", "Print version and exit") || args.HasFlag("V")) {
-		PrintTextBlock(GetVersionString());
+		std::cout << V6EMUL_VERSION << "\n\n";
 		return 0;
 	}
 
@@ -364,7 +65,7 @@ int main(int argc, char* argv[])
 	bool serve = args.HasFlag("serve", "Start the IPC server mode");
 	auto tcpPort = args.GetInt("tcp-port", "TCP port for IPC server (default: 9876)", false, 9876);
 	auto speed = args.GetString("speed", "Execution speed: 1%, 20%, 50%, 100%, 200%, max", false, "");
-	auto frameFormat = args.GetString("frame-format", "Pixel format for GET_FRAME_RAW: rgba (default), bgra", false, "rgba");
+	auto colorFormat = args.GetString("color-format", "Pixel format for GET_FRAME_RAW: abgr (default), argb", false, "abgr");
 	auto frameModeStr = args.GetString("frame-mode", "Frame region returned by IPC: full, bordered (default), borderless", false, "bordered");
 	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
 
@@ -376,15 +77,15 @@ int main(int argc, char* argv[])
 
 	// Banner mode: no flags at all
 	if (!testMode && !serve) {
-		PrintTextBlock(
-			std::format(
-				"{}\nUse --serve to start the IPC server, or\n    --rom <file> with --halt-exit, --run-frames, or --run-cycles for test mode.",
-				APP_TITLE));
+		std::cout << std::format(
+			"{}\nUse --serve to start the IPC server, or\n    --rom <file> with --halt-exit, --run-frames, or --run-cycles for test mode.",
+			APP_TITLE) << std::endl << std::endl;
 		return 0;
 	}
 
-	if (!bootRomPath.empty() && !CanLoadStartupFile(bootRomPath)) {
-		std::cerr << std::format("Error: failed to load boot ROM file: {}", bootRomPath) << std::endl;
+	auto resolvedBootPath = dev::ResolvePath(bootRomPath);
+	if (!bootRomPath.empty() && !dev::IsFileExist(resolvedBootPath)) {
+		std::cerr << std::format("Error: boot ROM file does not exist: {}, {}", bootRomPath, resolvedBootPath) << std::endl;
 		return 1;
 	}
 
@@ -393,11 +94,11 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	bool convertBgra = false;
-	if (frameFormat == "bgra") {
-		convertBgra = true;
-	} else if (frameFormat != "rgba") {
-		std::cerr << std::format("Error: --frame-format must be 'rgba' or 'bgra', got '{}'", frameFormat) << std::endl;
+	dev::Display::ColorFormat colorFormatEnum = dev::Display::ColorFormat::ABGR;
+	if (colorFormat == "argb") {
+		colorFormatEnum = dev::Display::ColorFormat::ARGB;
+	} else if (colorFormat != "abgr") {
+		std::cerr << std::format("Error: --color-format must be 'abgr' or 'argb', got '{}'", colorFormat) << std::endl;
 		return 1;
 	}
 
@@ -475,5 +176,5 @@ int main(int argc, char* argv[])
 	}
 
 	// Server mode
-	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort), convertBgra);
+	return RunServerMode(*hw, static_cast<uint16_t>(tcpPort), colorFormatEnum);
 }

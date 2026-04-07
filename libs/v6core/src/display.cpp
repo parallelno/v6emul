@@ -278,18 +278,32 @@ auto dev::Display::GetFrame(const bool _vsync)
 -> std::pair<const FrameBuffer*, FrameModeRegion>
 {
 	std::unique_lock<std::mutex> mlock(m_backBufferMutex);
+
+	// crop the frame according to the mode
 	const FrameBuffer& sourceP = _vsync ? m_backBuffer : m_frameBuffer;
+	auto frame_region = frame_mode_regions[static_cast<int>(m_frameMode)];
+
 	if (m_frameMode == FrameMode::FULL) {
 		m_gpuBuffer = sourceP;
 	}
-	else if (m_frameMode == FrameMode::BORDERED) {
-		CropFrame(sourceP, m_gpuBuffer.data(), frame_mode_regions[static_cast<int>(FrameMode::BORDERED)]);
-	}
-	else if (m_frameMode == FrameMode::BORDERLESS) {
-		CropFrame(sourceP, m_gpuBuffer.data(), frame_mode_regions[static_cast<int>(FrameMode::BORDERLESS)]);
+	else{
+		CropFrame(sourceP, m_gpuBuffer.data(), frame_region);
 	}
 
-	return { &m_gpuBuffer, frame_mode_regions[static_cast<int>(m_frameMode)] };
+	// Convert ABGR (ImGui) → ARGB (BGRA byte order) if requested
+	auto pxls = m_gpuBuffer.data();
+	auto len = frame_region.width * frame_region.height;
+	if (m_colorFormat == ColorFormat::ARGB) {
+		for (size_t i = 0; i < len; ++i)
+		{
+			auto& color = pxls[i];
+			color =
+				(color & 0xff00ff00) | // keep alpha and green
+				((color & 0x00ff0000) >> 16) | // move red to blue
+				((color & 0x000000ff) << 16); // move blue to red
+		}
+	}
+	return { &m_gpuBuffer, frame_region };
 }
 
 // Vector color format: uint8_t BBGGGRRR
@@ -355,7 +369,7 @@ uint32_t dev::Display::BytesToColorIdx512(uint32_t _screenBytes, uint8_t _bitIdx
 }
 
 // rasterizes the memory into the frame buff
-void dev::Display::BuffUpdate(BufferType _bufferType)
+void dev::Display::BuffUpdate(const BufferType _bufferType)
 {
 	switch (_bufferType)
 	{

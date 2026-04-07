@@ -64,6 +64,30 @@ void dev::CopyToClipboard(const std::string& _str) {
 #endif
 	}
 
+auto dev::ResolvePath(const std::string& _path) -> std::string
+{
+	if (_path.empty()) {
+		return {};
+	}
+
+	auto resolvedPath = _path;
+	if (!IsFileExist(resolvedPath)) {
+		resolvedPath = dev::GetExecutableDir() + _path;
+		if (!IsFileExist(resolvedPath)) {
+			return {};
+		}
+	}
+	return resolvedPath;
+}
+
+bool dev::IsFileExist(const std::string& _path)
+{
+	if (_path.empty()) {
+		return false;
+	}
+	return std::filesystem::exists(_path) && std::filesystem::is_regular_file(_path);
+}
+
 auto dev::LoadTextFile(const std::string& _path)
 -> std::string
 {
@@ -79,19 +103,13 @@ auto dev::LoadTextFile(const std::string& _path)
 	return data;
 }
 
+
 auto dev::LoadFile(const std::string& _path)
 -> Result<std::vector<uint8_t>>
 {
-	if (_path.empty()) {
+	auto resolvedPath = ResolvePath(_path);
+	if (resolvedPath.empty()) {
 		return {};
-	}
-
-	auto resolvedPath = _path;
-	if (!IsFileExist(resolvedPath)) {
-		resolvedPath = dev::GetExecutableDir() + _path;
-		if (!IsFileExist(resolvedPath)) {
-			return {};
-		}
 	}
 
 	// Open the file in binary mode

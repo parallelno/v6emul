@@ -584,7 +584,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR lpCmdLine, int nCmdSh
 	// Pre-encode the stats request
 	{
 		nlohmann::json statsReqJ = {
-			{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_HW_MAIN_STATS},
+			{dev::ipc::FIELD_CMD, static_cast<int>(Req::GET_HW_MAIN_STATS)},
 			{dev::ipc::FIELD_DATA, nullptr}
 		};
 		g_statsRequestBytes = dev::ipc::Encode(statsReqJ);

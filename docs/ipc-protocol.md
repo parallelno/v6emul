@@ -76,9 +76,9 @@ For high-throughput frame streaming, this command returns a **raw binary** respo
 ```
 
 - Frame dimensions: 768 × 312 pixels
-- Pixel format depends on `--frame-format`:
-  - `rgba` (default) — bytes `[R, G, B, A]` per pixel. Native for HTML Canvas `ImageData`, WebGL, and most graphics APIs.
-  - `bgra` — bytes `[B, G, R, A]` per pixel. Native for Windows `BI_RGB` bitmaps (GDI `StretchDIBits`).
+- Pixel format depends on `--color-format`:
+  - `abgr` (default) — bytes `[R, G, B, A]` per pixel. Native for HTML Canvas `ImageData`, WebGL, and most graphics APIs.
+  - `argb` — bytes `[B, G, R, A]` per pixel. Native for Windows `BI_RGB` bitmaps (GDI `StretchDIBits`).
 - Total pixel data: 768 × 312 × 4 = 958,464 bytes
 
 ## Hardware Commands
