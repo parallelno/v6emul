@@ -77,7 +77,7 @@ The example above emits `Value` three times (0, 1, 2) and leaves `Value` set to 
 
 ## `.optional` / `.endoptional`
 
-Defines an optional code block that is automatically removed from output if none of its internal labels and constants are used externally. Short form: `.opt` / `.endopt`.
+Defines an optional code block that is automatically removed from output if none of its internal labels and constants are used externally. Short forms: `.opt` / `.endopt`.
 
 ```asm
 .optional
@@ -94,6 +94,10 @@ useful_routine:
   ret      ; kept because useful_routine label was used
 .endopt
 ```
+
+## `.function` / `.endfunction`
+
+This is an alias for `.optional` / `.endoptional`. Short forms: `.func` / `.endfunc`
 
 ## `.setting`
 

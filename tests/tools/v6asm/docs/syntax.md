@@ -47,6 +47,7 @@ The assembler supports a rich expression system used throughout directives (`.if
 | Decimal | `42`, `-5` | Standard decimal numbers |
 | Hex `$` | `$FF`, `$1234` | Hexadecimal with `$` prefix |
 | Hex `0x` | `0xFF`, `0x1234` | Hexadecimal with `0x` prefix |
+| Hex `h` | `0FFh`, `07Fh` | Hexadecimal with `h` suffix (must start with digit) |
 | Binary `%` | `%1010`, `%11_00` | Binary with `%` prefix (underscores allowed) |
 | Binary `0b` | `0b1010`, `0b11_00` | Binary with `0b` prefix (underscores allowed) |
 | Binary `b` | `b1010`, `b11_00` | Binary with `b` prefix (underscores allowed) |
