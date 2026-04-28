@@ -2,12 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+    tags:
+      - 'v*'
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
+
+permissions:
+  contents: write
 
 jobs:
   version:
@@ -23,9 +23,9 @@ jobs:
         id: version
         shell: bash
         run: |
-          DATE="$(git log -1 --date=format:'%Y.%m.%d' --format='%cd')"
-          HASH="$(git rev-parse --short=7 HEAD)"
-          echo "version=${DATE}-${HASH}" >> "$GITHUB_OUTPUT"
+          VERSION="$(date -u +'%Y.%m.%d')"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
 
   build-test:
     name: Build and Test (${{ matrix.platform }})
@@ -63,6 +63,7 @@ jobs:
         with:
           name: v6emul-${{ needs.version.outputs.version }}-${{ matrix.platform }}
           path: build/ci/app/Release/v6emul.exe
+          if-no-files-found: error
 
       - name: Upload binary (Linux/macOS)
         if: runner.os != 'Windows'
@@ -70,3 +71,40 @@ jobs:
         with:
           name: v6emul-${{ needs.version.outputs.version }}-${{ matrix.platform }}
           path: build/ci/app/v6emul
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: [version, build-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          set -e
+          mkdir -p dist
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            if [[ "$name" == *windows* ]]; then
+              (cd "$dir" && zip -r "../../dist/${name}.zip" .)
+            else
+              chmod +x "${dir}"v6emul 2>/dev/null || true
+              tar -czf "../dist/${name}.tar.gz" -C "$dir" .
+            fi
+          done
+          ls -la ../dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*
