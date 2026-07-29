@@ -106,9 +106,9 @@ void dev::Keyboard::InitMapping()
 		// KeyCode				RowColumnCode = row<<8 | 1<<column
 		{ static_cast<int>(KeyCode::SPACE),			0x780 },
 		{ static_cast<int>(KeyCode::GRAVE),			0x701 },
-		{ static_cast<int>(KeyCode::RIGHTBRACKET),	0x720 },
+		{ static_cast<int>(KeyCode::RBRACKET),	0x720 },
 		{ static_cast<int>(KeyCode::BACKSLASH),		0x710 },
-		{ static_cast<int>(KeyCode::LEFTBRACKET),	0x708 },
+		{ static_cast<int>(KeyCode::LBRACKET),	0x708 },
 		{ static_cast<int>(KeyCode::Z),				0x704 },
 		{ static_cast<int>(KeyCode::Y),				0x702 },
 		{ static_cast<int>(KeyCode::X),				0x701 },
@@ -142,7 +142,7 @@ void dev::Keyboard::InitMapping()
 
 		{ static_cast<int>(KeyCode::SLASH),			0x380 },
 		{ static_cast<int>(KeyCode::PERIOD),		0x340 },
-		{ static_cast<int>(KeyCode::EQUALS),		0x320 },
+		{ static_cast<int>(KeyCode::PLUS),		    0x320 },
 		{ static_cast<int>(KeyCode::COMMA),			0x310 },
 		{ static_cast<int>(KeyCode::SEMICOLON),		0x308 },
 		{ static_cast<int>(KeyCode::APOSTROPHE),	0x304 },

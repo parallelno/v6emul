@@ -13,7 +13,7 @@ namespace KeyCode {
 	enum : int {
 		A = 0, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
 		NUM_0, NUM_1, NUM_2, NUM_3, NUM_4, NUM_5, NUM_6, NUM_7, NUM_8, NUM_9,
-		SPACE, MINUS, EQUALS, LEFTBRACKET, RIGHTBRACKET, BACKSLASH,
+		SPACE, MINUS, PLUS, LBRACKET, RBRACKET, BACKSLASH,
 		SEMICOLON, APOSTROPHE, GRAVE, COMMA, PERIOD, SLASH,
 		F1, F2, F3, F4, F5, F6, F7, F8,
 		TAB, RETURN, BACKSPACE, ESCAPE,
@@ -51,9 +51,9 @@ inline int VkToKeyCode(WPARAM vk)
 	case '8': return KeyCode::NUM_8;  case '9': return KeyCode::NUM_9;
 	case VK_SPACE:      return KeyCode::SPACE;
 	case VK_OEM_MINUS:  return KeyCode::MINUS;
-	case VK_OEM_PLUS:   return KeyCode::EQUALS;
-	case VK_OEM_4:      return KeyCode::LEFTBRACKET;
-	case VK_OEM_6:      return KeyCode::RIGHTBRACKET;
+	case VK_OEM_PLUS:   return KeyCode::PLUS;
+	case VK_OEM_4:      return KeyCode::LBRACKET;
+	case VK_OEM_6:      return KeyCode::RBRACKET;
 	case VK_OEM_5:      return KeyCode::BACKSLASH;
 	case VK_OEM_1:      return KeyCode::SEMICOLON;
 	case VK_OEM_7:      return KeyCode::APOSTROPHE;
