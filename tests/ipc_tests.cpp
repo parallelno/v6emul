@@ -357,10 +357,25 @@ static void test_run_and_fetch_frame()
 }
 
 // ── Test: Protocol encode/decode round-trip ─────────────────────────
+static void test_hardware_command_ids()
+{
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::SET_MEM), 42);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::KEY_HANDLING), 47);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::RUN_HEADLESS), 50);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD), 60);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::LOAD_ROM), 91);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::MOUNT_FDD), 92);
+
+	dev::Hardware hw("", "", true);
+	ASSERT_TRUE(!hw.Request(static_cast<dev::Hardware::Req>(0)));
+	ASSERT_TRUE(!hw.Request(static_cast<dev::Hardware::Req>(93)));
+}
+
+// ── Test: Protocol encode/decode round-trip ─────────────────────────
 static void test_protocol_encode_decode()
 {
 	nlohmann::json original = {
-		{"cmd", 42},
+		{"cmd", static_cast<int>(dev::Hardware::Req::SET_MEM)},
 		{"data", {{"key", "value"}, {"num", 123}, {"arr", {1, 2, 3}}}}
 	};
 
@@ -373,7 +388,7 @@ static void test_protocol_encode_decode()
 	// Decode payload (skip length prefix)
 	std::vector<uint8_t> payload(encoded.begin() + 4, encoded.end());
 	auto decoded = dev::ipc::Decode(payload);
-	ASSERT_EQ(decoded["cmd"].get<int>(), 42);
+	ASSERT_EQ(decoded["cmd"].get<int>(), static_cast<int>(dev::Hardware::Req::SET_MEM));
 	ASSERT_EQ(decoded["data"]["key"].get<std::string>(), std::string("value"));
 	ASSERT_EQ(decoded["data"]["num"].get<int>(), 123);
 	ASSERT_EQ(decoded["data"]["arr"].size(), (size_t)3);
@@ -534,6 +549,7 @@ static void test_fdd_persistence()
 
 int main()
 {
+	test_hardware_command_ids();
 	test_protocol_encode_decode();
 	test_response_helpers();
 	test_ping_pong();

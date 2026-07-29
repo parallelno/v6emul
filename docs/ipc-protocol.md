@@ -96,9 +96,10 @@ Positive `cmd` values map directly to the `Hardware::Req` enum. These are dispat
 | 5 | `RESET` | — | — (reboot, enable ROM) |
 | 6 | `RESTART` | — | — (reboot, disable ROM) |
 | 7 | `EXECUTE_INSTR` | — | — (single instruction step) |
+| 8 | `EXECUTE_FRAME` | — | — (run one full frame) |
 | 9 | `EXECUTE_FRAME_NO_BREAKS` | — | — (run one full frame ignoring breakpoints) |
-| 42 | `SET_CPU_SPEED` | `{"speed": int}` | — |
-| 49 | `RUN_HEADLESS` | `{"haltExit": bool, "maxFrames": int, "maxCycles": int}` | `{"cc", "frames", "halted", "pc", "sp", "af", "bc", "de", "hl"}` |
+| 44 | `SET_CPU_SPEED` | `{"speed": int}` | — |
+| 50 | `RUN_HEADLESS` | `{"haltExit": bool, "maxFrames": int, "maxCycles": int}` | `{"cc", "frames", "halted", "pc", "sp", "af", "bc", "de", "hl"}` |
 
 Speed values for `SET_CPU_SPEED`:
 
@@ -129,19 +130,22 @@ Speed values for `SET_CPU_SPEED`:
 | 16 | `GET_MEM_STRING_GLOBAL` | `{"addr": int, "len": int}` | `{"data": string}` |
 | 17 | `GET_WORD_STACK` | `{"addr": int}` | `{"data": uint16}` |
 | 18 | `GET_STACK_SAMPLE` | `{"addr": int}` | 11 word values at offsets -10 to +10 |
-| 40 | `SET_MEM` | `{"addr": int, "data": [bytes]}` | — |
-| 41 | `SET_BYTE_GLOBAL` | `{"addr": int, "data": uint8}` | — |
+| 42 | `SET_MEM` | `{"addr": int, "data": [bytes]}` | — |
+| 43 | `SET_BYTE_GLOBAL` | `{"addr": int, "data": uint8}` | — |
 
 ### Display
 
 | cmd | Name | Data | Response |
 |-----|------|------|----------|
 | 19 | `GET_DISPLAY_DATA` | — | `{"rasterLine", "rasterPixel", "frameNum"}` |
+| 26 | `GET_RUSLAT_HISTORY` | — | `{"data": int}` |
 | 27 | `GET_SCROLL_VERT` | — | `{"scrollVert": int}` |
 | 36 | `GET_DISPLAY_BORDER_LEFT` | — | `{"borderLeft": int}` |
 | 37 | `SET_DISPLAY_BORDER_LEFT` | `{"borderLeft": int}` | — |
 | 38 | `GET_DISPLAY_IRQ_COMMIT_PXL` | — | `{"irqCommitPxl": int}` |
 | 39 | `SET_DISPLAY_IRQ_COMMIT_PXL` | `{"irqCommitPxl": int}` | — |
+| 40 | `SET_FRAME_MODE` | `{"frameMode": int}` | — |
+| 41 | `SET_COLOR_FORMAT` | `{"colorFormat": int}` | — |
 
 ### I/O & Palette
 
@@ -162,13 +166,14 @@ Speed values for `SET_CPU_SPEED`:
 | 20 | `GET_MEMORY_MAPPING` | — | `{"mapping", "ramdiskIdx"}` |
 | 21 | `GET_MEMORY_MAPPINGS` | — | `{"ramdiskIdx", "mapping0"..."mapping7"}` |
 | 22 | `GET_GLOBAL_ADDR_RAM` | `{"addr": int}` | `{"data": int}` |
-| 44 | `IS_MEMROM_ENABLED` | — | `{"data": bool}` |
+| 28 | `GET_STEP_OVER_ADDR` | — | `{"data": int}` |
+| 46 | `IS_MEMROM_ENABLED` | — | `{"data": bool}` |
 
 ### Hardware Stats
 
 | cmd | Name | Data | Response |
 |-----|------|------|----------|
-| 43 | `GET_HW_MAIN_STATS` | — | See below |
+| 45 | `GET_HW_MAIN_STATS` | — | See below |
 
 `GET_HW_MAIN_STATS` returns:
 
@@ -198,12 +203,12 @@ Speed values for `SET_CPU_SPEED`:
 | 23 | `GET_FDC_INFO` | — | `{"drive", "side", "track", "lastS", "wait", "cmd", "rwLen", "position"}` |
 | 24 | `GET_FDD_INFO` | `{"driveIdx": int}` | `{"path", "updated", "reads", "writes", "mounted"}` |
 | 25 | `GET_FDD_IMAGE` | `{"driveIdx": int}` | `{"data": [bytes]}` |
-| 46 | `LOAD_FDD` | `{"driveIdx": int, "data": [bytes], "path": string}` | — |
-| 47 | `RESET_UPDATE_FDD` | `{"driveIdx": int}` | — |
-| 89 | `LOAD_ROM` | `{"data": [bytes], "addr": int, "autorun": bool}` | — |
-| 90 | `MOUNT_FDD` | `{"data": [bytes], "driveIdx": int, "path": string, "autoBoot": bool}` | — |
+| 48 | `LOAD_FDD` | `{"driveIdx": int, "data": [bytes], "path": string}` | — |
+| 49 | `RESET_UPDATE_FDD` | `{"driveIdx": int}` | — |
+| 91 | `LOAD_ROM` | `{"data": [bytes], "addr": int, "autorun": bool}` | — |
+| 92 | `MOUNT_FDD` | `{"data": [bytes], "driveIdx": int, "path": string, "autoBoot": bool}` | — |
 
-#### LOAD_ROM (cmd 89)
+#### LOAD_ROM (cmd 91)
 
 High-level ROM loading command. Stops emulation, writes `data` into RAM starting at `addr`, performs a `RESTART` (disables ROM overlay, resets CPU), and optionally starts running.
 
@@ -211,7 +216,7 @@ High-level ROM loading command. Stops emulation, writes `data` into RAM starting
 - `addr` — load address (default `0`)
 - `autorun` — if `true`, starts emulation after loading (default `false`)
 
-#### MOUNT_FDD (cmd 90)
+#### MOUNT_FDD (cmd 92)
 
 High-level floppy disk mounting command. Pads/truncates `data` to the standard FDD size (819,200 bytes), mounts it on the specified drive, and optionally resets the machine to boot from disk.
 
@@ -233,87 +238,87 @@ To implement save/discard for modified floppy disks:
 
 | cmd | Name | Data | Response |
 |-----|------|------|----------|
-| 45 | `KEY_HANDLING` | `{"scancode": int, "action": int}` | — |
+| 47 | `KEY_HANDLING` | `{"scancode": int, "action": int}` | — |
 
 ### Debug: Breakpoints
 
 | cmd | Name | Data |
 |-----|------|------|
-| 58 | `DEBUG_BREAKPOINT_ADD` | breakpoint definition |
-| 59 | `DEBUG_BREAKPOINT_DEL` | breakpoint id |
-| 60 | `DEBUG_BREAKPOINT_DEL_ALL` | — |
-| 61 | `DEBUG_BREAKPOINT_GET_STATUS` | breakpoint id |
-| 62 | `DEBUG_BREAKPOINT_SET_STATUS` | breakpoint id + status |
-| 63 | `DEBUG_BREAKPOINT_ACTIVE` | breakpoint id |
-| 64 | `DEBUG_BREAKPOINT_DISABLE` | breakpoint id |
-| 65 | `DEBUG_BREAKPOINT_GET_ALL` | — |
-| 66 | `DEBUG_BREAKPOINT_GET_UPDATES` | — |
+| 60 | `DEBUG_BREAKPOINT_ADD` | breakpoint definition |
+| 61 | `DEBUG_BREAKPOINT_DEL` | breakpoint id |
+| 62 | `DEBUG_BREAKPOINT_DEL_ALL` | — |
+| 63 | `DEBUG_BREAKPOINT_GET_STATUS` | breakpoint id |
+| 64 | `DEBUG_BREAKPOINT_SET_STATUS` | breakpoint id + status |
+| 65 | `DEBUG_BREAKPOINT_ACTIVE` | breakpoint id |
+| 66 | `DEBUG_BREAKPOINT_DISABLE` | breakpoint id |
+| 67 | `DEBUG_BREAKPOINT_GET_ALL` | — |
+| 68 | `DEBUG_BREAKPOINT_GET_UPDATES` | — |
 
 ### Debug: Watchpoints
 
 | cmd | Name | Data |
 |-----|------|------|
-| 67 | `DEBUG_WATCHPOINT_ADD` | watchpoint definition |
-| 68 | `DEBUG_WATCHPOINT_DEL_ALL` | — |
-| 69 | `DEBUG_WATCHPOINT_DEL` | watchpoint id |
-| 70 | `DEBUG_WATCHPOINT_GET_UPDATES` | — |
-| 71 | `DEBUG_WATCHPOINT_GET_ALL` | — |
+| 69 | `DEBUG_WATCHPOINT_ADD` | watchpoint definition |
+| 70 | `DEBUG_WATCHPOINT_DEL_ALL` | — |
+| 71 | `DEBUG_WATCHPOINT_DEL` | watchpoint id |
+| 72 | `DEBUG_WATCHPOINT_GET_UPDATES` | — |
+| 73 | `DEBUG_WATCHPOINT_GET_ALL` | — |
 
 ### Debug: Memory Edits
 
 | cmd | Name | Data |
 |-----|------|------|
-| 72 | `DEBUG_MEMORY_EDIT_ADD` | edit definition |
-| 73 | `DEBUG_MEMORY_EDIT_DEL_ALL` | — |
-| 74 | `DEBUG_MEMORY_EDIT_DEL` | edit id |
-| 75 | `DEBUG_MEMORY_EDIT_GET` | edit id |
-| 76 | `DEBUG_MEMORY_EDIT_EXISTS` | edit id |
+| 74 | `DEBUG_MEMORY_EDIT_ADD` | edit definition |
+| 75 | `DEBUG_MEMORY_EDIT_DEL_ALL` | — |
+| 76 | `DEBUG_MEMORY_EDIT_DEL` | edit id |
+| 77 | `DEBUG_MEMORY_EDIT_GET` | edit id |
+| 78 | `DEBUG_MEMORY_EDIT_EXISTS` | edit id |
 
 ### Debug: Code Performance
 
 | cmd | Name | Data |
 |-----|------|------|
-| 77 | `DEBUG_CODE_PERF_ADD` | perf region definition |
-| 78 | `DEBUG_CODE_PERF_DEL_ALL` | — |
-| 79 | `DEBUG_CODE_PERF_DEL` | perf region id |
-| 80 | `DEBUG_CODE_PERF_GET` | perf region id |
-| 81 | `DEBUG_CODE_PERF_EXISTS` | perf region id |
+| 79 | `DEBUG_CODE_PERF_ADD` | perf region definition |
+| 80 | `DEBUG_CODE_PERF_DEL_ALL` | — |
+| 81 | `DEBUG_CODE_PERF_DEL` | perf region id |
+| 82 | `DEBUG_CODE_PERF_GET` | perf region id |
+| 83 | `DEBUG_CODE_PERF_EXISTS` | perf region id |
 
 ### Debug: Lua Scripts
 
 | cmd | Name | Data |
 |-----|------|------|
-| 82 | `DEBUG_SCRIPT_ADD` | script definition |
-| 83 | `DEBUG_SCRIPT_DEL_ALL` | — |
-| 84 | `DEBUG_SCRIPT_DEL` | script id |
-| 85 | `DEBUG_SCRIPT_GET_ALL` | — |
-| 86 | `DEBUG_SCRIPT_GET_UPDATES` | — |
+| 84 | `DEBUG_SCRIPT_ADD` | script definition |
+| 85 | `DEBUG_SCRIPT_DEL_ALL` | — |
+| 86 | `DEBUG_SCRIPT_DEL` | script id |
+| 87 | `DEBUG_SCRIPT_GET_ALL` | — |
+| 88 | `DEBUG_SCRIPT_GET_UPDATES` | — |
 
 ### Debug: Recorder
 
 | cmd | Name |
 |-----|------|
-| 52 | `DEBUG_RECORDER_RESET` |
-| 53 | `DEBUG_RECORDER_PLAY_FORWARD` |
-| 54 | `DEBUG_RECORDER_PLAY_REVERSE` |
-| 55 | `DEBUG_RECORDER_GET_STATE_RECORDED` |
-| 56 | `DEBUG_RECORDER_GET_STATE_CURRENT` |
-| 57 | `DEBUG_RECORDER_SERIALIZE` |
-| 58 | `DEBUG_RECORDER_DESERIALIZE` |
+| 53 | `DEBUG_RECORDER_RESET` |
+| 54 | `DEBUG_RECORDER_PLAY_FORWARD` |
+| 55 | `DEBUG_RECORDER_PLAY_REVERSE` |
+| 56 | `DEBUG_RECORDER_GET_STATE_RECORDED` |
+| 57 | `DEBUG_RECORDER_GET_STATE_CURRENT` |
+| 58 | `DEBUG_RECORDER_SERIALIZE` |
+| 59 | `DEBUG_RECORDER_DESERIALIZE` |
 
 ### Debug: Trace Log
 
 | cmd | Name |
 |-----|------|
-| 87 | `DEBUG_TRACE_LOG_ENABLE` |
-| 88 | `DEBUG_TRACE_LOG_DISABLE` |
+| 89 | `DEBUG_TRACE_LOG_ENABLE` |
+| 90 | `DEBUG_TRACE_LOG_DISABLE` |
 
 ### Debug: Other
 
 | cmd | Name | Data |
 |-----|------|------|
-| 50 | `DEBUG_ATTACH` | `{"data": bool}` |
-| 51 | `DEBUG_RESET` | — |
+| 51 | `DEBUG_ATTACH` | `{"data": bool}` |
+| 52 | `DEBUG_RESET` | — |
 
 ## Throughput
 
