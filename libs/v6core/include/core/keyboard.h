@@ -33,7 +33,6 @@ namespace dev
 		LSHIFT = 0xA0, RSHIFT = 0xA1, LCTRL = 0xA2, LGUI = 0x5B, LALT = 0xA4, RALT = 0xA5,
 		// System
 		F11 = 0x7A, F12 = 0x7B,
-		COUNT
 	};
 
 	enum class KeyAction : int {
