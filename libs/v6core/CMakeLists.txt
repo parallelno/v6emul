@@ -32,7 +32,6 @@ target_include_directories(v6core
 target_link_libraries(v6core
     PUBLIC
         v6utils
-    PRIVATE
         luajit
 )
 
