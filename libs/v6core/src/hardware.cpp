@@ -547,7 +547,9 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 	}
 
 	default:
-		out = DebugReqHandling(req, dataJ, m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		if (DebugReqHandling) {
+			out = DebugReqHandling(req, dataJ, m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		}
 	}
 
 	m_reqRes.emplace(std::move(out));
