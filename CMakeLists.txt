@@ -124,6 +124,7 @@ add_library(luajit STATIC IMPORTED)
 set_target_properties(luajit PROPERTIES
     IMPORTED_LOCATION ${LUAJIT_STATIC_LIB}
     INTERFACE_INCLUDE_DIRECTORIES ${luajit_SOURCE_DIR}/src
+    INTERFACE_LINK_OPTIONS $<$<CXX_COMPILER_ID:MSVC>:/NODEFAULTLIB:LIBCMT>
 )
 
 # ── Sub-projects ───────────────────────────────────────────────────────
