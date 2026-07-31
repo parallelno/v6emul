@@ -1,5 +1,6 @@
 add_executable(v6emul
     main.cpp
+    ipc_request.cpp
     server_mode.cpp
     test_mode.cpp
 )

@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <chrono>
+#include <exception>
 
 #include "utils/types.h"
 #include "core/cpu_i8080.h"
@@ -96,8 +97,13 @@ namespace dev
 		std::thread m_executionThread;
 		std::thread m_reqHandlingThread;
 		std::atomic<Status> m_status;
+		struct RequestResult {
+			nlohmann::json data;
+			std::exception_ptr error;
+			bool handled = true;
+		};
 		TQueue <std::pair<Req, nlohmann::json>> m_reqs; // request
-		TQueue <nlohmann::json> m_reqRes;				// request's result sent back
+		TQueue <RequestResult> m_reqRes;				// request's result sent back
 
 		static constexpr std::chrono::microseconds m_reqHandlingTime = 1ms;
 		ExecSpeed m_execSpeed = ExecSpeed::NORMAL;

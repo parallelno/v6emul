@@ -13,6 +13,8 @@
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
 #include "ipc/commands.h"
+#include "ipc_request.h"
+#include "v6emul_version.h"
 
 static std::atomic<bool> g_shutdown{false};
 static dev::ipc::Transport* g_serverPtr = nullptr;
@@ -75,17 +77,33 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 			requestJ = dev::ipc::Decode(payload);
 		} catch (const std::exception& e) {
 			auto errResp = dev::ipc::Encode(
-				dev::ipc::MakeErrorResponse(std::format("decode error: {}", e.what())));
+				dev::ipc::MakeErrorResponse(std::format("decode error: {}", e.what()), "decode_error"));
 			server.Send(errResp);
 			continue;
 		}
 
-		int cmdInt = requestJ.value(dev::ipc::FIELD_CMD, 0);
-		auto dataJ = requestJ.value(dev::ipc::FIELD_DATA, nlohmann::json{});
+		auto validation = dev::server::ValidateRequest(requestJ);
+		if (auto error = std::get_if<dev::server::RequestError>(&validation)) {
+			auto errResp = dev::ipc::Encode(
+				dev::ipc::MakeErrorResponse(error->message, error->code));
+			server.Send(errResp);
+			continue;
+		}
+
+		auto request = std::get<dev::server::IpcRequest>(std::move(validation));
+		int cmdInt = request.command;
+		auto dataJ = std::move(request.data);
 
 		// Handle pseudo-commands
 		if (cmdInt == dev::ipc::CMD_PING) {
 			auto resp = dev::ipc::Encode(dev::ipc::MakeResponse({{"pong", true}}));
+			server.Send(resp);
+			continue;
+		}
+
+		if (cmdInt == dev::ipc::CMD_GET_SERVER_INFO) {
+			auto resp = dev::ipc::Encode(dev::ipc::MakeResponse(
+				dev::server::MakeServerInfo(V6EMUL_VERSION)));
 			server.Send(resp);
 			continue;
 		}
@@ -150,7 +168,12 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 			result = _hw.Request(req, dataJ);
 		} catch (const std::exception& e) {
 			auto errResp = dev::ipc::Encode(
-				dev::ipc::MakeErrorResponse(std::format("dispatch error: {}", e.what())));
+				dev::ipc::MakeErrorResponse(std::format("dispatch error: {}", e.what()), "dispatch_error"));
+			server.Send(errResp);
+			continue;
+		} catch (...) {
+			auto errResp = dev::ipc::Encode(
+				dev::ipc::MakeErrorResponse("dispatch error", "dispatch_error"));
 			server.Send(errResp);
 			continue;
 		}

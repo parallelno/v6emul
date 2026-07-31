@@ -30,10 +30,11 @@ auto MakeResponse(const nlohmann::json& _data) -> nlohmann::json
 	};
 }
 
-auto MakeErrorResponse(const std::string& _error) -> nlohmann::json
+auto MakeErrorResponse(const std::string& _error, const std::string& _code) -> nlohmann::json
 {
 	return {
 		{FIELD_OK, false},
+		{FIELD_CODE, _code},
 		{FIELD_ERROR, _error}
 	};
 }

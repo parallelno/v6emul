@@ -25,7 +25,8 @@ namespace dev::ipc
 	// Build a success response json.
 	auto MakeResponse(const nlohmann::json& _data) -> nlohmann::json;
 
-	// Build an error response json.
-	auto MakeErrorResponse(const std::string& _error) -> nlohmann::json;
+	// Build a structured error response json.
+	auto MakeErrorResponse(const std::string& _error,
+		const std::string& _code = "internal_error") -> nlohmann::json;
 
 } // namespace dev::ipc

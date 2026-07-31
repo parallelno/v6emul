@@ -13,10 +13,12 @@ namespace dev::ipc
 	inline constexpr const char* FIELD_DATA  = "data";
 	inline constexpr const char* FIELD_OK    = "ok";
 	inline constexpr const char* FIELD_ERROR = "error";
+	inline constexpr const char* FIELD_CODE  = "code";
 
 	// Special pseudo-commands (negative values, not in the Req enum)
 	inline constexpr int CMD_PING = -1;
 	inline constexpr int CMD_PONG = -2;
 	inline constexpr int CMD_GET_FRAME = -3; // fetch raw ABGR frame buffer
 	inline constexpr int CMD_GET_FRAME_RAW = -4; // raw binary frame (no msgpack)
+	inline constexpr int CMD_GET_SERVER_INFO = -5;
 } // namespace dev::ipc

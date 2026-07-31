@@ -52,6 +52,8 @@ Two threads with strict ownership:
 | `Scripts` | `core/scripts.h` | LuaJIT scripting engine for debug automation. |
 | `Transport` | `ipc/transport.h` | Single-client TCP server. Length-prefixed framing. |
 
+The app layer owns IPC request validation because it is the boundary that maps public wire commands to `Hardware::Req`. `v6ipc` remains transport-only, and `v6core` remains usable without protocol concerns. Command-processing exceptions are captured on the emulation thread and rethrown on the caller thread, allowing the server to return an error without terminating emulation.
+
 ## Emulation Loop
 
 ```

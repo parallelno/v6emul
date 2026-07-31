@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <algorithm>
 
 #include "core/hardware.h"
 #include "core/display.h"
@@ -11,6 +12,7 @@
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
 #include "ipc/commands.h"
+#include "ipc_request.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -273,6 +275,35 @@ static void test_get_regs()
 	ctx.Close();
 }
 
+static void test_malformed_request_does_not_stop_emulation()
+{
+	ServerContext ctx;
+	ASSERT_TRUE(ctx.Start());
+
+	TestClient client;
+	ASSERT_TRUE(client.Connect(ctx.port));
+	ctx.WaitForClient();
+	ctx.StartLoop();
+
+	nlohmann::json malformedRequest = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)},
+		{dev::ipc::FIELD_DATA, {}}
+	};
+	auto errorResponse = client.SendRequest(malformedRequest);
+	ASSERT_TRUE(!errorResponse[dev::ipc::FIELD_OK].get<bool>());
+
+	nlohmann::json validRequest = {
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_REGS)},
+		{dev::ipc::FIELD_DATA, {}}
+	};
+	auto validResponse = client.SendRequest(validRequest);
+	ASSERT_TRUE(validResponse[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_TRUE(validResponse[dev::ipc::FIELD_DATA].contains("sp"));
+
+	client.CloseSocket();
+	ctx.Close();
+}
+
 // ── Test: Memory write/read round-trip ──────────────────────────────
 static void test_memory_round_trip()
 {
@@ -366,9 +397,9 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::LOAD_ROM), 91);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::MOUNT_FDD), 92);
 
-	dev::Hardware hw("", "", true);
-	ASSERT_TRUE(!hw.Request(static_cast<dev::Hardware::Req>(0)));
-	ASSERT_TRUE(!hw.Request(static_cast<dev::Hardware::Req>(93)));
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(0)));
+	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(93)));
 }
 
 // ── Test: Protocol encode/decode round-trip ─────────────────────────
@@ -403,7 +434,88 @@ static void test_response_helpers()
 
 	auto errResp = dev::ipc::MakeErrorResponse("something broke");
 	ASSERT_TRUE(!errResp[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_EQ(errResp[dev::ipc::FIELD_CODE].get<std::string>(), std::string("internal_error"));
 	ASSERT_EQ(errResp[dev::ipc::FIELD_ERROR].get<std::string>(), std::string("something broke"));
+}
+
+static void test_request_validation()
+{
+	auto assertInvalid = [](const nlohmann::json& request) {
+		auto result = dev::server::ValidateRequest(request);
+		ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(result));
+	};
+
+	assertInvalid(nullptr);
+	assertInvalid(nlohmann::json::object());
+	assertInvalid({{dev::ipc::FIELD_CMD, "18"}, {dev::ipc::FIELD_DATA, {}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, 1000}, {dev::ipc::FIELD_DATA, {}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, dev::ipc::CMD_PONG}, {dev::ipc::FIELD_DATA, {}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_REGS)},
+		{dev::ipc::FIELD_DATA, nullptr}});
+
+	const auto stackCommand = static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE);
+	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {{"addr", nullptr}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {{"addr", "65520"}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {{"addr", -1}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {{"addr", 1.5}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {{"addr", 65536}}}});
+
+	for (const int address : {0, 0xFFFF}) {
+		auto result = dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, stackCommand},
+			{dev::ipc::FIELD_DATA, {{"addr", address}}}
+		});
+		ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(result));
+	}
+
+	auto infoResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_SERVER_INFO}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(infoResult));
+}
+
+static void test_server_info()
+{
+	auto info = dev::server::MakeServerInfo("test-build");
+	auto hasCommand = [&info](const int command) {
+		return std::find(info["commands"].begin(), info["commands"].end(), command) !=
+			info["commands"].end();
+	};
+	ASSERT_EQ(info["protocolVersion"].get<int>(), 1);
+	ASSERT_EQ(info["emulatorVersion"].get<std::string>(), std::string("test-build"));
+	ASSERT_TRUE(hasCommand(dev::ipc::CMD_GET_SERVER_INFO));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)));
+	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
+}
+
+static void test_stack_sample_words()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	constexpr int stackPointer = 0x1000;
+	std::vector<uint8_t> bytes;
+	for (int offset = -10; offset <= 10; offset += 2) {
+		auto value = static_cast<uint16_t>(0x2000 + offset);
+		bytes.push_back(static_cast<uint8_t>(value & 0xFF));
+		bytes.push_back(static_cast<uint8_t>(value >> 8));
+	}
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
+		{{"addr", stackPointer - 10}, {"data", bytes}}));
+
+	for (bool running : {false, true}) {
+		if (running) ASSERT_TRUE(hw->Request(dev::Hardware::Req::RUN));
+		auto result = hw->Request(dev::Hardware::Req::GET_STACK_SAMPLE,
+			{{"addr", stackPointer}});
+		ASSERT_TRUE(result);
+		if (!result) continue;
+		auto sample = *result;
+		for (int offset = -10; offset <= 10; offset += 2) {
+			ASSERT_EQ(sample[std::to_string(offset)].get<uint16_t>(),
+				static_cast<uint16_t>(0x2000 + offset));
+		}
+		if (running) ASSERT_TRUE(hw->Request(dev::Hardware::Req::STOP));
+	}
 }
 
 // ── Test: LOAD_ROM via IPC ──────────────────────────────────────────
@@ -552,8 +664,12 @@ int main()
 	test_hardware_command_ids();
 	test_protocol_encode_decode();
 	test_response_helpers();
+	test_request_validation();
+	test_server_info();
+	test_stack_sample_words();
 	test_ping_pong();
 	test_get_regs();
+	test_malformed_request_does_not_stop_emulation();
 	test_memory_round_trip();
 	test_run_and_fetch_frame();
 	test_load_rom();

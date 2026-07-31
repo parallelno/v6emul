@@ -22,7 +22,9 @@ The payload is serialized using `nlohmann::json::to_msgpack()` / `from_msgpack()
 ```
 
 - `cmd` — command identifier (see [Command Reference](#command-reference) below)
-- `data` — command-specific parameters (may be `null` or `{}` for commands that take no arguments)
+- `data` — command-specific object; it may be omitted or `{}` for commands that take no arguments
+
+The server rejects non-object requests, non-integer command IDs, unknown commands, and non-object `data` before dispatching to the emulation thread.
 
 ### Response Format
 
@@ -38,9 +40,20 @@ On error:
 ```json
 {
   "ok": false,
+  "code": "invalid_request",
   "error": "description"
 }
 ```
+
+Error codes are stable for client branching; `error` is a human-readable diagnostic:
+
+| Code | Meaning |
+|------|---------|
+| `decode_error` | The MessagePack payload could not be decoded |
+| `invalid_request` | The request envelope or command data is invalid |
+| `unknown_command` | The command ID is not supported |
+| `dispatch_error` | Command processing failed after validation |
+| `internal_error` | An unclassified server error |
 
 ## Special Commands (Pseudo-Commands)
 
@@ -51,6 +64,29 @@ These use negative `cmd` values and are handled directly by the IPC server layer
 | `-1` | `PING` | Health check. Returns `{"pong": true}` |
 | `-3` | `GET_FRAME` | Returns ABGR frame buffer as MessagePack binary |
 | `-4` | `GET_FRAME_RAW` | Returns raw binary frame (bypasses MessagePack, see below) |
+| `-5` | `GET_SERVER_INFO` | Returns protocol, build, command, and capability information |
+
+### GET_SERVER_INFO Response
+
+Clients should call `GET_SERVER_INFO` during connection setup and verify `protocolVersion` and required capabilities before issuing debugger commands.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "protocolVersion": 1,
+    "emulatorVersion": "2026.07.29-0d7a65e",
+    "commands": [-5, -4, -3, -1, 1, 2],
+    "capabilities": {
+      "debugger": true,
+      "rawFrame": true,
+      "stackSampleSchema": 1
+    }
+  }
+}
+```
+
+`commands` contains the complete list for the running binary; the shortened list above is illustrative. `emulatorVersion` is the same build identity printed by `v6emul --version`.
 
 ### GET_FRAME Response
 
@@ -129,9 +165,34 @@ Speed values for `SET_CPU_SPEED`:
 | 15 | `GET_THREE_BYTES_RAM` | `{"addr": int}` | `{"data": int}` |
 | 16 | `GET_MEM_STRING_GLOBAL` | `{"addr": int, "len": int}` | `{"data": string}` |
 | 17 | `GET_WORD_STACK` | `{"addr": int}` | `{"data": uint16}` |
-| 18 | `GET_STACK_SAMPLE` | `{"addr": int}` | 11 word values at offsets -10 to +10 |
+| 18 | `GET_STACK_SAMPLE` | `{"addr": uint16}` | Object containing 11 words keyed by offsets `-10` through `10` |
 | 42 | `SET_MEM` | `{"addr": int, "data": [bytes]}` | — |
 | 43 | `SET_BYTE_GLOBAL` | `{"addr": int, "data": uint8}` | — |
+
+#### GET_STACK_SAMPLE (cmd 18)
+
+`addr` is required and must be an integer from `0` through `65535`. It normally contains the current stack pointer. The command is valid while paused or running.
+
+Each response value is a little-endian 16-bit word beginning at `addr + offset`. Address arithmetic wraps modulo 65536, so a sample around `0x0000` reads negative offsets from the top of the 16-bit address space.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "-10": 4660,
+    "-8": 22136,
+    "-6": 39612,
+    "-4": 57072,
+    "-2": 4951,
+    "0": 9320,
+    "2": 13980,
+    "4": 18640,
+    "6": 23300,
+    "8": 27960,
+    "10": 32620
+  }
+}
+```
 
 ### Display
 

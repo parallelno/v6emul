@@ -161,7 +161,11 @@ auto dev::Hardware::Request(const Req _req, const nlohmann::json& _dataJ)
 -> Result<nlohmann::json>
 {
 	m_reqs.push({ _req, _dataJ });
-	return m_reqRes.pop();
+	auto response = m_reqRes.pop();
+	if (!response) return {};
+	if (response->error) std::rethrow_exception(response->error);
+	if (!response->handled) return {};
+	return { std::move(response->data) };
 }
 
 // internal thread
@@ -173,6 +177,7 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 	const auto& [req, dataJ] = *result;
 
 	nlohmann::json out;
+	try {
 
 	switch (req)
 	{
@@ -549,10 +554,19 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 	default:
 		if (DebugReqHandling) {
 			out = DebugReqHandling(req, dataJ, m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		} else {
+			m_reqRes.emplace({{}, nullptr, false});
+			return;
 		}
 	}
 
-	m_reqRes.emplace(std::move(out));
+	}
+	catch (...) {
+		m_reqRes.emplace({{}, std::current_exception(), false});
+		return;
+	}
+
+	m_reqRes.emplace({std::move(out), nullptr, true});
 }
 
 void dev::Hardware::Reset()
@@ -714,31 +728,14 @@ auto dev::Hardware::GetStackSample(const nlohmann::json _addrJ)
 -> nlohmann::json
 {
 	Addr addr = _addrJ["addr"];
-	auto dataN10 = m_memory.GetByte(addr - 9, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr - 10, Memory::AddrSpace::STACK);
-	auto dataN8 = m_memory.GetByte(addr - 7, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr - 8, Memory::AddrSpace::STACK);
-	auto dataN6 = m_memory.GetByte(addr - 5, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr - 6, Memory::AddrSpace::STACK);
-	auto dataN4 = m_memory.GetByte(addr - 3, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr - 4, Memory::AddrSpace::STACK);
-	auto dataN2 = m_memory.GetByte(addr - 1, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr - 2, Memory::AddrSpace::STACK);
-	auto data = m_memory.GetByte(addr + 1, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr, Memory::AddrSpace::STACK);
-	auto dataP2 = m_memory.GetByte(addr + 3, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr + 2, Memory::AddrSpace::STACK);
-	auto dataP4 = m_memory.GetByte(addr + 5, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr + 4, Memory::AddrSpace::STACK);
-	auto dataP6 = m_memory.GetByte(addr + 7, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr + 6, Memory::AddrSpace::STACK);
-	auto dataP8 = m_memory.GetByte(addr + 9, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr + 8, Memory::AddrSpace::STACK);
-	auto dataP10 = m_memory.GetByte(addr + 11, Memory::AddrSpace::STACK) << 8 | m_memory.GetByte(addr + 10, Memory::AddrSpace::STACK);
-
-	nlohmann::json out = {
-		{"-10", dataN10},
-		{"-8", dataN8},
-		{"-6", dataN6},
-		{"-4", dataN4},
-		{"-2", dataN2},
-		{"0", data},
-		{"2", dataP2},
-		{"4", dataP4},
-		{"6", dataP6},
-		{"8", dataP8},
-		{"10", dataP10},
-	};
+	nlohmann::json out = nlohmann::json::object();
+	for (int offset = -10; offset <= 10; offset += 2) {
+		auto lowAddr = static_cast<Addr>(addr + offset);
+		auto highAddr = static_cast<Addr>(lowAddr + 1);
+		auto word = m_memory.GetByte(highAddr, Memory::AddrSpace::STACK) << 8 |
+			m_memory.GetByte(lowAddr, Memory::AddrSpace::STACK);
+		out[std::to_string(offset)] = word;
+	}
 	return out;
 }
 

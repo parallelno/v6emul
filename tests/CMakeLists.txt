@@ -15,7 +15,9 @@ target_link_libraries(determinism_tests PRIVATE v6core v6utils)
 add_test(NAME determinism_tests COMMAND determinism_tests)
 
 add_executable(ipc_tests ipc_tests.cpp)
+target_sources(ipc_tests PRIVATE ${CMAKE_SOURCE_DIR}/app/ipc_request.cpp)
 target_link_libraries(ipc_tests PRIVATE v6core v6ipc v6utils)
+target_include_directories(ipc_tests PRIVATE ${CMAKE_SOURCE_DIR}/app)
 add_test(NAME ipc_tests COMMAND ipc_tests)
 
 add_executable(e2e_tests e2e_tests.cpp)
