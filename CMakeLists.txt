@@ -71,7 +71,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 FetchContent_Declare(
     LuaJIT
     GIT_REPOSITORY https://github.com/LuaJIT/LuaJIT.git
-    GIT_TAG v2.1.0-beta3
+    GIT_TAG 8271c643c21d1b2f344e339f559f2de6f3663191
 )
 FetchContent_MakeAvailable(LuaJIT)
 FetchContent_GetProperties(LuaJIT)
