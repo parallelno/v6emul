@@ -10,6 +10,7 @@
 #include <csignal>
 
 #include "core/hardware.h"
+#include "core/watchpoints.h"
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
 #include "ipc/raw_frame.h"
@@ -162,6 +163,15 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 		decltype(_hw.Request(req, dataJ)) result;
 		try {
 			result = _hw.Request(req, dataJ);
+		} catch (const dev::WatchpointNotFound& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {
+				{"command", static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT)},
+				{"field", "id"},
+				{"id", error.GetId()}
+			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
 		} catch (const std::exception& e) {
 			auto errResp = dev::ipc::Encode(
 				dev::ipc::MakeErrorResponse(std::format("dispatch error: {}", e.what()), "dispatch_error"));

@@ -302,6 +302,23 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		m_debugData.GetWatchpoints().AddNew({std::move(wpData), _reqDataJ["comment"]});
 		break;
 	}
+	case Hardware::Req::DEBUG_WATCHPOINT_EDIT: {
+		Watchpoint::Data wpData{
+			_reqDataJ["id"],
+			Watchpoint::GetAccess(_reqDataJ["access"]),
+			_reqDataJ["globalAddr"],
+			ParseConditionName(_reqDataJ["condition"]),
+			_reqDataJ["value"],
+			Watchpoint::GetType(_reqDataJ["type"]),
+			_reqDataJ["len"],
+			_reqDataJ["active"]
+		};
+		const auto id = wpData.id;
+		if (!m_debugData.GetWatchpoints().Edit({std::move(wpData), _reqDataJ["comment"]})) {
+			throw WatchpointNotFound{id};
+		}
+		break;
+	}
 	case Hardware::Req::DEBUG_WATCHPOINT_GET_UPDATES:
 		out = nlohmann::json{ {"updates", static_cast<uint64_t>(m_debugData.GetWatchpoints().GetUpdates()) } };
 		break;

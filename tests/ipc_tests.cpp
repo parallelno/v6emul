@@ -432,10 +432,11 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::LOAD_ROM), 91);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::MOUNT_FDD), 92);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_MEM), 93);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT), 94);
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(0)));
-	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(94)));
+	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(95)));
 }
 
 // ── Test: Protocol encode/decode round-trip ─────────────────────────
@@ -539,6 +540,17 @@ static void test_request_validation()
 		{dev::ipc::FIELD_CMD, watchpointAdd}, {dev::ipc::FIELD_DATA, watchpoint}
 	});
 	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(watchpointResult));
+	const auto watchpointEdit = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT);
+	auto editedWatchpoint = watchpoint;
+	editedWatchpoint["id"] = 7;
+	auto watchpointEditResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, watchpointEdit}, {dev::ipc::FIELD_DATA, editedWatchpoint}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(watchpointEditResult));
+	auto missingEditId = watchpoint;
+	assertInvalid({{dev::ipc::FIELD_CMD, watchpointEdit}, {dev::ipc::FIELD_DATA, missingEditId}});
+	editedWatchpoint["id"] = -1;
+	assertInvalid({{dev::ipc::FIELD_CMD, watchpointEdit}, {dev::ipc::FIELD_DATA, editedWatchpoint}});
 
 	auto assertInvalidWatchpoint = [&watchpoint, &assertInvalid, watchpointAdd](const nlohmann::json& patch) {
 		auto invalidData = watchpoint;
@@ -632,6 +644,7 @@ static void test_server_info()
 	ASSERT_EQ(info["capabilities"]["watchpointSchema"].get<int>(), 1);
 	ASSERT_TRUE(!info["capabilities"].contains("legacyPackedWatchpoints"));
 	ASSERT_TRUE(info["capabilities"]["watchpointServerAllocatedIds"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["watchpointEdit"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["watchpointLimits"]["maxCommentBytes"].get<int>(), 1024);
 
 	auto response = dev::ipc::MakeResponse(info);
@@ -754,6 +767,32 @@ static void test_structured_watchpoints()
 	ASSERT_EQ((*all)[0]["condition"].get<std::string>(), std::string("EQU"));
 	ASSERT_TRUE(!(*all)[0].contains("breakL"));
 	ASSERT_TRUE(!(*all)[0].contains("breakH"));
+
+	const auto beforeEdit = updates();
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT, {
+		{"id", 0}, {"globalAddr", 0x30000}, {"len", 2}, {"value", 0x1234},
+		{"access", "W"}, {"condition", "NOT_EQU"}, {"type", "WORD"},
+		{"active", false}, {"comment", "edited"}
+	}));
+	ASSERT_EQ(updates(), beforeEdit + 1);
+	all = getAll();
+	ASSERT_EQ((*all)[0]["id"].get<int>(), 0);
+	ASSERT_EQ((*all)[0]["globalAddr"].get<uint32_t>(), static_cast<uint32_t>(0x30000));
+	ASSERT_EQ((*all)[0]["comment"].get<std::string>(), std::string("edited"));
+
+	const auto beforeInvalidEdit = updates();
+	bool notFound = false;
+	try {
+		hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT, {
+			{"id", 999}, {"globalAddr", 0x30000}, {"len", 1}, {"value", 0x12},
+			{"access", "R"}, {"condition", "EQU"}, {"type", "LEN"},
+			{"active", true}, {"comment", "missing"}
+		});
+	} catch (const dev::WatchpointNotFound& error) {
+		notFound = error.GetId() == 999;
+	}
+	ASSERT_TRUE(notFound);
+	ASSERT_EQ(updates(), beforeInvalidEdit);
 
 	const auto beforeMissingDelete = updates();
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL, {{"id", 999}}));

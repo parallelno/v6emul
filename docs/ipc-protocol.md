@@ -413,6 +413,7 @@ Support and limits are advertised by `GET_SERVER_INFO` under `breakpointSchema` 
 | 71 | `DEBUG_WATCHPOINT_DEL` | watchpoint id |
 | 72 | `DEBUG_WATCHPOINT_GET_UPDATES` | — |
 | 73 | `DEBUG_WATCHPOINT_GET_ALL` | — |
+| 94 | `DEBUG_WATCHPOINT_EDIT` | structured watchpoint definition plus `id` |
 
 #### Structured Watchpoint Schema 1
 
@@ -433,6 +434,8 @@ The watchpoint protocol uses structured schema 1 exclusively. An add request con
 
 `DEBUG_WATCHPOINT_GET_ALL` returns an array of the same fields plus `id`, ordered by ascending ID. An empty collection is `[]`. Runtime match state is not serialized. Packed watchpoint representations are not accepted or returned.
 
+`DEBUG_WATCHPOINT_EDIT` requires every schema field plus the non-negative `id` returned by `DEBUG_WATCHPOINT_GET_ALL`. It replaces that watchpoint's configuration while preserving the ID. An unknown ID returns `invalid_request` with `details.command = 94`, `details.field = "id"`, and the rejected ID. Failed edits do not mutate the collection or increment its update counter.
+
 Schema 1 constraints:
 
 | Field | Constraint |
@@ -450,7 +453,7 @@ Unknown fields are rejected. `WORD` requires `len = 2` and compares the low byte
 
 `DEBUG_WATCHPOINT_GET_UPDATES` returns a 32-bit unsigned wrapping mutation counter. Successful adds and effective deletes increment it. Rejected requests, deleting an unknown ID, and clearing an already empty collection do not. Watchpoint mutations are serialized on the emulation thread and may be requested while execution is running.
 
-Structured schema support and limits are advertised by `GET_SERVER_INFO` under `watchpointSchema`, `watchpointServerAllocatedIds`, `watchpointMutationsWhileRunning`, and `watchpointLimits`.
+Structured schema support and limits are advertised by `GET_SERVER_INFO` under `watchpointSchema`, `watchpointServerAllocatedIds`, `watchpointEdit`, `watchpointMutationsWhileRunning`, and `watchpointLimits`.
 
 ### Debug: Memory Edits
 

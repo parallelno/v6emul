@@ -18,6 +18,7 @@ The current watchpoint commands are:
 | 71 | `DEBUG_WATCHPOINT_DEL` |
 | 72 | `DEBUG_WATCHPOINT_GET_UPDATES` |
 | 73 | `DEBUG_WATCHPOINT_GET_ALL` |
+| 94 | `DEBUG_WATCHPOINT_EDIT` |
 
 ## 2. Summary of Client Problems
 
@@ -88,7 +89,7 @@ The special value `-1` is a backend convention that leaks into every client. A c
 
 ### Required contract
 
-The new watchpoint protocol must define `DEBUG_WATCHPOINT_ADD` without an `id` field. The backend assigns the unique ID. The assigned ID becomes visible through `DEBUG_WATCHPOINT_GET_ALL` and is used by later update or delete requests.
+The new watchpoint protocol defines `DEBUG_WATCHPOINT_ADD` without an `id` field. The backend assigns the unique ID. The assigned ID becomes visible through `DEBUG_WATCHPOINT_GET_ALL` and is used by `DEBUG_WATCHPOINT_EDIT` and delete requests.
 
 The `id: -1` convention is not part of the client contract and is not accepted by the server.
 
@@ -138,7 +139,7 @@ The reliability problem is not the absence of a canonical response. It is the ab
 
 ### Required contract
 
-`DEBUG_WATCHPOINT_ADD`, `DEBUG_WATCHPOINT_DEL`, and `DEBUG_WATCHPOINT_DEL_ALL` should return normal success when accepted. Invalid data, an unknown ID, or an unsupported operation should return a stable protocol error with enough detail for v6vscode to report or correct the problem. No echoed watchpoint is required.
+`DEBUG_WATCHPOINT_ADD`, `DEBUG_WATCHPOINT_EDIT`, `DEBUG_WATCHPOINT_DEL`, and `DEBUG_WATCHPOINT_DEL_ALL` should return normal success when accepted. Invalid data, an unknown edit ID, or an unsupported operation should return a stable protocol error with enough detail for v6vscode to report or correct the problem. No echoed watchpoint is required.
 
 ## 7. Collection Synchronization Needs One Stable Shape
 
@@ -252,6 +253,7 @@ The feedback correctly identifies native object serialization as the principal a
 |---|---|---|
 | Structured, versioned schema | Accepted | Removes compiler layout, endianness, and transient state from the public contract. Commands 69 and 73 use schema 1 exclusively. |
 | ID-free creation | Accepted | ID allocation belongs to the collection. Clients cannot submit an ID when creating a watchpoint. |
+| ID-based editing | Accepted | Command 94 replaces a validated existing watchpoint while preserving its server-assigned ID; unknown IDs return `invalid_request`. |
 | Field validation and stable errors | Accepted for schema 1 | Validation occurs before emulation-thread dispatch and rejects unknown fields. Unknown-ID mutation errors require a typed command-result design and are not emulated with ad hoc response fields. |
 | Stable list shape and order | Accepted | All snapshots are arrays, including empty snapshots, and are ordered by ID. |
 | Update-counter semantics | Accepted | The counter is documented as wrapping `uint32`; rejected and no-op mutations do not increment it. |

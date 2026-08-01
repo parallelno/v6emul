@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdexcept>
 #include <string>
 
 #include "utils/types.h"
@@ -7,6 +8,18 @@
 
 namespace dev
 {
+	class WatchpointNotFound : public std::runtime_error
+	{
+	public:
+		explicit WatchpointNotFound(const Id id)
+			: std::runtime_error("watchpoint id not found"), m_id(id) {}
+
+		auto GetId() const -> Id { return m_id; }
+
+	private:
+		Id m_id;
+	};
+
 	struct Watchpoints
 	{
 	public:
@@ -14,6 +27,7 @@ namespace dev
 
 		void Add(Watchpoint&& _bp);
 		auto AddNew(Watchpoint&& _wp) -> Id;
+		auto Edit(Watchpoint&& _wp) -> bool;
 		void Add(const nlohmann::json& _wpJ);
 		void Del(const dev::Id _id);
 		void Check(const Watchpoint::Access _access, const GlobalAddr _globalAddr, const uint8_t _value);

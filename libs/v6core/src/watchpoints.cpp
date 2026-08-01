@@ -38,6 +38,16 @@ auto dev::Watchpoints::AddNew(Watchpoint&& _wp) -> Id
 	return id;
 }
 
+auto dev::Watchpoints::Edit(Watchpoint&& _wp) -> bool
+{
+	auto watchpointIt = m_wps.find(_wp.data.id);
+	if (watchpointIt == m_wps.end()) return false;
+
+	watchpointIt->second.Update(std::move(_wp));
+	m_updates++;
+	return true;
+}
+
 void dev::Watchpoints::Add(const nlohmann::json& _wpJ)
 {
 	m_updates++;

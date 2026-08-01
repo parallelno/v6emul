@@ -37,7 +37,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-			command <= static_cast<int>(dev::Hardware::Req::GET_MEM);
+			command <= static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -99,7 +99,7 @@ namespace
 		return true;
 	}
 
-	auto ValidateStructuredWatchpoint(const nlohmann::json& data, const int command)
+	auto ValidateStructuredWatchpoint(const nlohmann::json& data, const int command, const bool requireId = false)
 		-> std::optional<dev::server::RequestError>
 	{
 		constexpr size_t MAX_COMMENT_BYTES = 1024;
@@ -108,7 +108,7 @@ namespace
 			"condition", "type", "active", "comment"
 		};
 		for (const auto& [name, value] : data.items()) {
-			if (!fields.contains(name)) {
+			if (!fields.contains(name) && !(requireId && name == "id")) {
 				return dev::server::RequestError{"invalid_request",
 					"DEBUG_WATCHPOINT_ADD contains unknown field: " + name,
 					{{"command", command}, {"field", name}}};
@@ -124,6 +124,10 @@ namespace
 		uint64_t address = 0;
 		uint64_t length = 0;
 		uint64_t value = 0;
+		uint64_t id = 0;
+		if (requireId && (!data.contains("id") || !ReadUnsigned(data["id"], id) ||
+			id > static_cast<uint64_t>(std::numeric_limits<dev::Id>::max())))
+			return invalid("id", "must be a non-negative integer");
 		if (!data.contains("globalAddr") || !ReadUnsigned(data["globalAddr"], address))
 			return invalid("globalAddr", "must be an unsigned integer");
 		if (!data.contains("len") || !ReadUnsigned(data["len"], length) || length == 0)
@@ -279,6 +283,9 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD)) {
 		if (auto error = ValidateStructuredWatchpoint(data, command)) return *error;
 	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT)) {
+		if (auto error = ValidateStructuredWatchpoint(data, command, true)) return *error;
+	}
 
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_GET_ALL) && !data.empty()) {
 		return RequestError{"invalid_request", "command 73 does not accept data"};
@@ -314,7 +321,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::GET_MEM); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT); ++command) {
 		commands.push_back(command);
 	}
 
@@ -334,6 +341,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 				{"maxCommentBytes", 1024}
 			}},
 			{"watchpointServerAllocatedIds", true},
+			{"watchpointEdit", true},
 			{"watchpointMutationsWhileRunning", true},
 			{"watchpointLimits", {
 				{"maxRangeLength", dev::Memory::MEMORY_GLOBAL_LEN},
