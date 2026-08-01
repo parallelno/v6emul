@@ -37,7 +37,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-			command <= static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT);
+			command <= static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -305,7 +305,8 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 	}
 	if ((command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_DEL_ALL) ||
 		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_ALL) ||
-		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_UPDATES)) && !data.empty()) {
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_UPDATES) ||
+		command == static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD)) && !data.empty()) {
 		return RequestError{"invalid_request", "command " + std::to_string(command) + " does not accept data"};
 	}
 
@@ -321,7 +322,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD); ++command) {
 		commands.push_back(command);
 	}
 
@@ -336,6 +337,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"stackSampleSchema", 1},
 			{"breakpointSchema", 1},
 			{"watchpointSchema", 1},
+			{"stopRecordSchema", 1},
 			{"breakpointLimits", {
 				{"mappingPageBits", 33},
 				{"maxCommentBytes", 1024}

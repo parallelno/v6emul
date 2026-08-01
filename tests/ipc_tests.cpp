@@ -433,10 +433,11 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::MOUNT_FDD), 92);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_MEM), 93);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT), 94);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD), 95);
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(0)));
-	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(95)));
+	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(96)));
 }
 
 // ── Test: Protocol encode/decode round-trip ─────────────────────────
@@ -529,6 +530,12 @@ static void test_request_validation()
 		{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_SERVER_INFO}
 	});
 	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(infoResult));
+	const auto stopRecordCommand = static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD);
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, stopRecordCommand}, {dev::ipc::FIELD_DATA, nlohmann::json::object()}
+	})));
+	assertInvalid({{dev::ipc::FIELD_CMD, stopRecordCommand},
+		{dev::ipc::FIELD_DATA, {{"consume", true}}}});
 
 	const auto watchpointAdd = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD);
 	const nlohmann::json watchpoint = {
@@ -636,12 +643,14 @@ static void test_server_info()
 	ASSERT_TRUE(hasCommand(dev::ipc::CMD_GET_SERVER_INFO));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_MEM)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["breakpointSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["breakpointLimits"]["mappingPageBits"].get<int>(), 33);
 	ASSERT_EQ(info["capabilities"]["watchpointSchema"].get<int>(), 1);
+	ASSERT_EQ(info["capabilities"]["stopRecordSchema"].get<int>(), 1);
 	ASSERT_TRUE(!info["capabilities"].contains("legacyPackedWatchpoints"));
 	ASSERT_TRUE(info["capabilities"]["watchpointServerAllocatedIds"].get<bool>());
 	ASSERT_TRUE(info["capabilities"]["watchpointEdit"].get<bool>());
@@ -661,6 +670,42 @@ static void test_server_info()
 	response[dev::ipc::FIELD_DATA]["protocolVersion"] = "2";
 	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(response));
 	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(nullptr));
+}
+
+static void test_stop_record_lifecycle()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto readRecord = [&hw]() {
+		return *hw->Request(dev::Hardware::Req::GET_STOP_RECORD);
+	};
+
+	const auto initial = readRecord();
+	ASSERT_EQ(initial["sequence"].get<uint64_t>(), uint64_t(0));
+	ASSERT_EQ(initial["reason"].get<std::string>(), std::string("unknown"));
+	ASSERT_EQ(readRecord(), initial);
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::STOP));
+	const auto paused = readRecord();
+	ASSERT_EQ(paused["sequence"].get<uint64_t>(), uint64_t(1));
+	ASSERT_EQ(paused["reason"].get<std::string>(), std::string("pause"));
+	ASSERT_EQ(readRecord(), paused);
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESET));
+	const auto reset = readRecord();
+	ASSERT_EQ(reset["sequence"].get<uint64_t>(), uint64_t(2));
+	ASSERT_EQ(reset["reason"].get<std::string>(), std::string("reset"));
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
+		{{"addr", 0}, {"data", std::vector<uint8_t>{0x00, 0x76}}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	const auto stepped = readRecord();
+	ASSERT_EQ(stepped["reason"].get<std::string>(), std::string("step"));
+	ASSERT_TRUE(stepped["sequence"].get<uint64_t>() > reset["sequence"].get<uint64_t>());
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	const auto halted = readRecord();
+	ASSERT_EQ(halted["reason"].get<std::string>(), std::string("halt"));
+	ASSERT_TRUE(halted.contains("description"));
 }
 
 static void test_structured_breakpoints()
@@ -757,6 +802,7 @@ static void test_structured_watchpoints()
 	};
 	ASSERT_TRUE(add(0x20000, "second"));
 	ASSERT_TRUE(add(0x10000, "first"));
+	ASSERT_EQ(updates(), initialUpdates + 2);
 
 	auto all = getAll();
 	ASSERT_TRUE(all.HasValue());
@@ -767,6 +813,21 @@ static void test_structured_watchpoints()
 	ASSERT_EQ((*all)[0]["condition"].get<std::string>(), std::string("EQU"));
 	ASSERT_TRUE(!(*all)[0].contains("breakL"));
 	ASSERT_TRUE(!(*all)[0].contains("breakH"));
+
+	const auto beforeReset = updates();
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESET));
+	all = getAll();
+	ASSERT_EQ(all->size(), static_cast<size_t>(2));
+	ASSERT_EQ((*all)[0]["id"].get<int>(), 0);
+	ASSERT_EQ((*all)[1]["id"].get<int>(), 1);
+	ASSERT_EQ(updates(), beforeReset);
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+	all = getAll();
+	ASSERT_EQ(all->size(), static_cast<size_t>(2));
+	ASSERT_EQ((*all)[0]["id"].get<int>(), 0);
+	ASSERT_EQ((*all)[1]["id"].get<int>(), 1);
+	ASSERT_EQ(updates(), beforeReset);
 
 	const auto beforeEdit = updates();
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT, {
@@ -797,6 +858,211 @@ static void test_structured_watchpoints()
 	const auto beforeMissingDelete = updates();
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL, {{"id", 999}}));
 	ASSERT_EQ(updates(), beforeMissingDelete);
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL, {{"id", 1}}));
+	ASSERT_EQ(updates(), beforeMissingDelete + 1);
+	all = getAll();
+	ASSERT_EQ(all->size(), static_cast<size_t>(1));
+	ASSERT_EQ((*all)[0]["id"].get<int>(), 0);
+
+	ASSERT_TRUE(add(0x40000, "third"));
+	all = getAll();
+	ASSERT_EQ(all->size(), static_cast<size_t>(2));
+	ASSERT_EQ((*all)[0]["id"].get<int>(), 0);
+	ASSERT_EQ((*all)[1]["id"].get<int>(), 2);
+
+	const auto beforeClear = updates();
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL_ALL));
+	ASSERT_EQ(updates(), beforeClear + 1);
+	all = getAll();
+	ASSERT_TRUE(all->empty());
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL_ALL));
+	ASSERT_EQ(updates(), beforeClear + 1);
+}
+
+static void test_watchpoint_matching()
+{
+	dev::Watchpoints watchpoints;
+	const auto readId = watchpoints.AddNew(dev::Watchpoint{
+		dev::Watchpoint::Data{-1, dev::Watchpoint::Access::R, 0x1000,
+			dev::Condition::EQU, 0x42, dev::Watchpoint::Type::LEN, 2, true},
+		"read range"
+	});
+	const auto wordId = watchpoints.AddNew(dev::Watchpoint{
+		dev::Watchpoint::Data{-1, dev::Watchpoint::Access::W, 0x2000,
+			dev::Condition::EQU, 0x1234, dev::Watchpoint::Type::WORD, 2, true},
+		"word write"
+	});
+	const auto disabledId = watchpoints.AddNew(dev::Watchpoint{
+		dev::Watchpoint::Data{-1, dev::Watchpoint::Access::RW, 0x3000,
+			dev::Condition::ANY, 0, dev::Watchpoint::Type::LEN, 1, false},
+		"disabled"
+	});
+	ASSERT_EQ(readId, 0);
+	ASSERT_EQ(wordId, 1);
+	ASSERT_EQ(disabledId, 2);
+	ASSERT_EQ(watchpoints.GetAll().size(), static_cast<size_t>(3));
+
+	watchpoints.Check(dev::Watchpoint::Access::W, 0x1000, 0x42);
+	ASSERT_TRUE(!watchpoints.CheckBreak());
+	watchpoints.Check(dev::Watchpoint::Access::R, 0x1001, 0x41);
+	ASSERT_TRUE(!watchpoints.CheckBreak());
+	watchpoints.Check(dev::Watchpoint::Access::R, 0x1001, 0x42);
+	ASSERT_TRUE(watchpoints.CheckBreak());
+	ASSERT_TRUE(!watchpoints.CheckBreak());
+
+	watchpoints.Check(dev::Watchpoint::Access::W, 0x2000, 0x34);
+	ASSERT_TRUE(!watchpoints.CheckBreak());
+	watchpoints.Check(dev::Watchpoint::Access::W, 0x2001, 0x12);
+	ASSERT_TRUE(watchpoints.CheckBreak());
+	watchpoints.Check(dev::Watchpoint::Access::R, 0x2000, 0x34);
+	watchpoints.Check(dev::Watchpoint::Access::R, 0x2001, 0x12);
+	ASSERT_TRUE(!watchpoints.CheckBreak());
+
+	watchpoints.Check(dev::Watchpoint::Access::R, 0x3000, 0xFF);
+	ASSERT_TRUE(!watchpoints.CheckBreak());
+
+	dev::Watchpoints overlapping;
+	overlapping.AddNew(dev::Watchpoint{
+		dev::Watchpoint::Data{-1, dev::Watchpoint::Access::R, 0x4000,
+			dev::Condition::ANY, 0, dev::Watchpoint::Type::LEN, 1, true},
+		"first"
+	});
+	const auto overlappingWordId = overlapping.AddNew(dev::Watchpoint{
+		dev::Watchpoint::Data{-1, dev::Watchpoint::Access::R, 0x4000,
+			dev::Condition::EQU, 0x1234, dev::Watchpoint::Type::WORD, 2, true},
+		"second"
+	});
+	overlapping.Check(dev::Watchpoint::Access::R, 0x4000, 0x34);
+	ASSERT_TRUE(overlapping.GetAll().at(overlappingWordId).data.breakL);
+}
+
+static void test_watchpoints_break_execution()
+{
+	struct Scenario {
+		const char* name;
+		std::vector<uint8_t> program;
+		std::vector<uint8_t> targetData;
+		uint32_t globalAddr;
+		uint8_t len;
+		uint16_t value;
+		const char* access;
+		const char* condition;
+		const char* type;
+		bool active;
+		bool shouldBreak;
+		uint16_t breakPc;
+	};
+
+	const std::vector<uint8_t> writeByte = {
+		0x3E, 0x42,             // MVI A, 0x42
+		0x32, 0x00, 0x10,       // STA 0x1000
+		0xC3, 0x00, 0x00        // JMP 0
+	};
+	const std::vector<uint8_t> readByte = {
+		0x3A, 0x00, 0x10,       // LDA 0x1000
+		0xC3, 0x00, 0x00        // JMP 0
+	};
+	const std::vector<uint8_t> writeWord = {
+		0x21, 0x34, 0x12,       // LXI H, 0x1234
+		0x22, 0x00, 0x10,       // SHLD 0x1000
+		0xC3, 0x00, 0x00        // JMP 0
+	};
+	const std::vector<uint8_t> readWord = {
+		0x2A, 0x00, 0x10,       // LHLD 0x1000
+		0xC3, 0x00, 0x00        // JMP 0
+	};
+
+	const std::vector<Scenario> scenarios = {
+		{"write ANY", writeByte, {0}, 0x1000, 1, 0, "W", "ANY", "LEN", true, true, 5},
+		{"write EQU", writeByte, {0}, 0x1000, 1, 0x42, "W", "EQU", "LEN", true, true, 5},
+		{"write LESS", writeByte, {0}, 0x1000, 1, 0x43, "W", "LESS", "LEN", true, true, 5},
+		{"write GREATER", writeByte, {0}, 0x1000, 1, 0x41, "W", "GREATER", "LEN", true, true, 5},
+		{"write LESS_EQU", writeByte, {0}, 0x1000, 1, 0x42, "W", "LESS_EQU", "LEN", true, true, 5},
+		{"write GREATER_EQU", writeByte, {0}, 0x1000, 1, 0x42, "W", "GREATER_EQU", "LEN", true, true, 5},
+		{"write NOT_EQU", writeByte, {0}, 0x1000, 1, 0x43, "W", "NOT_EQU", "LEN", true, true, 5},
+		{"read access", readByte, {0x42}, 0x1000, 1, 0x42, "R", "EQU", "LEN", true, true, 3},
+		{"read-write access", writeByte, {0}, 0x1000, 1, 0x42, "RW", "EQU", "LEN", true, true, 5},
+		{"range", writeByte, {0}, 0x0FFF, 2, 0x42, "W", "EQU", "LEN", true, true, 5},
+		{"word write", writeWord, {0, 0}, 0x1000, 2, 0x1234, "W", "EQU", "WORD", true, true, 6},
+		{"word read", readWord, {0x34, 0x12}, 0x1000, 2, 0x1234, "R", "EQU", "WORD", true, true, 3},
+		{"condition mismatch", writeByte, {0}, 0x1000, 1, 0x43, "W", "EQU", "LEN", true, false, 0},
+		{"access mismatch", writeByte, {0}, 0x1000, 1, 0x42, "R", "EQU", "LEN", true, false, 0},
+		{"inactive", writeByte, {0}, 0x1000, 1, 0x42, "W", "EQU", "LEN", false, false, 0},
+		{"word mismatch", writeWord, {0, 0}, 0x1000, 2, 0x1334, "W", "EQU", "WORD", true, false, 0},
+	};
+
+	for (const auto& scenario : scenarios) {
+		auto hw = std::make_unique<dev::Hardware>("", "", true);
+		auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+		ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
+		ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_CPU_SPEED,
+			{{"speed", static_cast<int>(dev::Hardware::ExecSpeed::MAX)}}));
+		ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
+			{{"addr", 0}, {"data", scenario.program}}));
+		ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
+			{{"addr", 0x1000}, {"data", scenario.targetData}}));
+		ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+		ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD, {
+			{"globalAddr", scenario.globalAddr}, {"len", scenario.len},
+			{"value", scenario.value}, {"access", scenario.access},
+			{"condition", scenario.condition}, {"type", scenario.type},
+			{"active", scenario.active}, {"comment", scenario.name}
+		}));
+		ASSERT_TRUE(hw->Request(dev::Hardware::Req::RUN));
+
+		bool running = true;
+		for (int poll = 0; poll < 32 && running; ++poll) {
+			auto status = hw->Request(dev::Hardware::Req::IS_RUNNING);
+			ASSERT_TRUE(status);
+			running = (*status)["isRunning"].get<bool>();
+		}
+		ASSERT_EQ(running, !scenario.shouldBreak);
+		if (scenario.shouldBreak) {
+			auto pc = hw->Request(dev::Hardware::Req::GET_REG_PC);
+			ASSERT_TRUE(pc);
+			ASSERT_EQ((*pc)["pc"].get<uint16_t>(), scenario.breakPc);
+			auto record = hw->Request(dev::Hardware::Req::GET_STOP_RECORD);
+			ASSERT_TRUE(record);
+			ASSERT_EQ((*record)["reason"].get<std::string>(), std::string("watchpoint"));
+			ASSERT_EQ((*record)["watchpointIds"][0].get<int>(), 0);
+			ASSERT_EQ((*record)["accessedGlobalAddress"].get<uint32_t>(), scenario.globalAddr + scenario.len - 1);
+			ASSERT_EQ((*record)["access"].get<std::string>(),
+				std::string(scenario.breakPc == 3 ? "read" : "write"));
+			ASSERT_TRUE(record->contains(scenario.breakPc == 3 ? "observedValue" : "newValue"));
+		} else {
+			ASSERT_TRUE(hw->Request(dev::Hardware::Req::STOP));
+		}
+	}
+}
+
+static void test_breakpoint_stop_record()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_CPU_SPEED,
+		{{"speed", static_cast<int>(dev::Hardware::ExecSpeed::MAX)}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
+		{{"addr", 0}, {"data", std::vector<uint8_t>{0x00, 0xC3, 0x00, 0x00}}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD, {
+		{"addr", 1}, {"memPages", dev::Breakpoint::MAPPING_PAGES_ALL},
+		{"status", "ACTIVE"}, {"autoDelete", false}, {"operand", "A"},
+		{"condition", "ANY"}, {"value", 0}, {"comment", "after NOP"}
+	}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RUN));
+
+	bool running = true;
+	for (int poll = 0; poll < 32 && running; ++poll) {
+		running = (*hw->Request(dev::Hardware::Req::IS_RUNNING))["isRunning"].get<bool>();
+	}
+	ASSERT_TRUE(!running);
+	const auto record = *hw->Request(dev::Hardware::Req::GET_STOP_RECORD);
+	ASSERT_EQ(record["reason"].get<std::string>(), std::string("breakpoint"));
+	ASSERT_EQ(record["breakpointAddress"].get<uint16_t>(), uint16_t(1));
+	ASSERT_EQ(record["breakpointIds"][0].get<uint16_t>(), uint16_t(1));
+	ASSERT_EQ(record["pc"].get<uint16_t>(), uint16_t(1));
 }
 
 static void test_raw_frame_codec()
@@ -1020,8 +1286,12 @@ int main()
 	test_response_helpers();
 	test_request_validation();
 	test_server_info();
+	test_stop_record_lifecycle();
 	test_structured_breakpoints();
 	test_structured_watchpoints();
+	test_watchpoint_matching();
+	test_watchpoints_break_execution();
+	test_breakpoint_stop_record();
 	test_raw_frame_codec();
 	test_stack_sample_words();
 	test_ping_pong();

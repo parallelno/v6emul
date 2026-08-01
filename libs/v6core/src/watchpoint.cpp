@@ -35,13 +35,10 @@ auto dev::Watchpoint::Check(const Access _access, const GlobalAddr _globalAddr, 
 	{
 		value_byte = data.value & 0xff;
 	}
-	else // check the hi byte of a word 
-	if (data.globalAddr + 1 != _globalAddr) {
-		return false;
-	} 
-	else{
-		low = false;
-		value_byte = data.value >> 8 & 0xff;
+	else
+	{
+		low = _globalAddr == data.globalAddr;
+		value_byte = low ? data.value & 0xff : data.value >> 8 & 0xff;
 	}
 
 	switch (data.cond)

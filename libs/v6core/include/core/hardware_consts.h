@@ -103,4 +103,5 @@ enum class Req: int {
 	MOUNT_FDD									= 92,
 	GET_MEM										= 93,
 	DEBUG_WATCHPOINT_EDIT						= 94,
+	GET_STOP_RECORD								= 95,
 };

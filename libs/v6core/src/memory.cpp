@@ -112,14 +112,15 @@ auto dev::Memory::CpuRead(const Addr _addr, const AddrSpace _addrSpace,
 -> uint8_t
 {
 	auto globalAddr = GetGlobalAddr(_addr, _addrSpace);
+	auto value = m_state.update.memType == MemType::ROM && globalAddr < m_rom.size() ?
+		m_rom[globalAddr] : m_ram[globalAddr];
 
 	// debug
 	m_state.debug.readGlobalAddr[_byteNum] = globalAddr;
+	m_state.debug.read[_byteNum] = value;
 	m_state.debug.readLen = _byteNum + 1;
 
-	// return byte
-	return m_state.update.memType == MemType::ROM && globalAddr < m_rom.size() ?
-		m_rom[globalAddr] : m_ram[globalAddr];
+	return value;
 }
 
 // accessed by the CPU

@@ -87,6 +87,8 @@ namespace dev
 			DebugFunc _debugFunc, DebugReqHandlingFunc _debugReqHandlingFunc);
 
 		void SetDebugPortOutCallback(IO::DebugPortOutFunc _func);
+		void RecordStop(const std::string& _reason,
+			const nlohmann::json& _trigger = nlohmann::json::object());
 
 
 	private:
@@ -97,6 +99,8 @@ namespace dev
 		std::thread m_executionThread;
 		std::thread m_reqHandlingThread;
 		std::atomic<Status> m_status;
+		uint64_t m_stopSequence = 0;
+		nlohmann::json m_stopRecord;
 		struct RequestResult {
 			nlohmann::json data;
 			std::exception_ptr error;
@@ -126,7 +130,7 @@ namespace dev
 		auto RunHeadless(const nlohmann::json& _dataJ) -> nlohmann::json;
 		void Reset();
 		void Restart();
-		void Stop();
+		void Stop(bool _record = true);
 		void Run();
 		auto GetRegs() const -> nlohmann::json;
 		auto GetByteGlobal(const nlohmann::json _globalAddrJ) -> nlohmann::json;

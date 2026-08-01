@@ -77,15 +77,19 @@ void dev::Watchpoints::Del(const dev::Id _id)
 }
 
 // Hardware thread
-void dev::Watchpoints::Check(const Watchpoint::Access _access, const GlobalAddr _globalAddr, const uint8_t _value)
+void dev::Watchpoints::Check(const Watchpoint::Access _access, const GlobalAddr _globalAddr,
+	const uint8_t _value, const std::optional<uint8_t> _oldValue)
 {
-	auto wpI = std::find_if(m_wps.begin(), m_wps.end(),
-		[_access, _globalAddr, _value](WpMap::value_type& pair)
-		{
-			return pair.second.Check(_access, _globalAddr, _value);
-		});
-
-	m_wpBreak |= wpI != m_wps.end();
+	std::vector<Id> matchedIds;
+	for (auto& [id, watchpoint] : m_wps)
+	{
+		if (watchpoint.Check(_access, _globalAddr, _value)) matchedIds.push_back(id);
+	}
+	if (!matchedIds.empty()) {
+		std::sort(matchedIds.begin(), matchedIds.end());
+		m_wpBreak = true;
+		if (!m_hit) m_hit = Hit{std::move(matchedIds), _access, _globalAddr, _value, _oldValue};
+	}
 }
 
 // Hardware thread
@@ -107,6 +111,7 @@ bool dev::Watchpoints::CheckBreak()
 	if (!m_wpBreak) return false;
 
 	m_wpBreak = false;
+	m_hit.reset();
 
 	// reset wps break status
 	for (auto& [id, watchpoint] : m_wps)

@@ -20,6 +20,12 @@ dev::Hardware::Hardware(const std::string& _pathBootData,
 	m_display(m_memory, m_io)
 {
 	Init();
+	m_stopRecord = {
+		{"sequence", 0},
+		{"reason", "unknown"},
+		{"pc", m_cpu.GetPC()},
+		{"globalInstructionAddress", m_memory.GetGlobalAddr(m_cpu.GetPC(), Memory::AddrSpace::RAM)}
+	};
 	m_executionThread = std::thread(&Hardware::Execution, this);
 }
 
@@ -66,6 +72,11 @@ bool dev::Hardware::ExecuteInstruction()
 
 	} while (!m_cpu.IsInstructionExecuted());
 
+	if (m_cpu.GetHLTA()) {
+		RecordStop("halt", {{"description", "HLT instruction executed"}});
+		return true;
+	}
+
 	// debug per instruction
 	if (m_debugAttached && Debug(m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP()) ) {
 		return true;
@@ -75,6 +86,10 @@ bool dev::Hardware::ExecuteInstruction()
 	{
 		m_memory.InitRamDiskMapping(); // reset RAM Disk mode collision
 		dev::Log("ERROR: more than one RAM Disk has mapping enabled");
+		RecordStop("exception", {
+			{"exceptionCode", "ram_disk_mapping_collision"},
+			{"description", "More than one RAM Disk has mapping enabled"}
+		});
 		return true;
 	}
 
@@ -106,7 +121,7 @@ void dev::Hardware::Execution()
 			{
 				if (ExecuteInstruction())
 				{
-					Stop();
+					Stop(false);
 					break;
 				};
 
@@ -208,18 +223,28 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		break;
 
 	case Req::EXECUTE_INSTR:
-		ExecuteInstruction();
+		if (!ExecuteInstruction()) RecordStop("step");
+		break;
+
+	case Req::EXECUTE_FRAME:
+		ExecuteFrameNoBreaks();
+		RecordStop("frameStep");
 		break;
 
 	case Req::EXECUTE_FRAME_NO_BREAKS:
 	{
 		ExecuteFrameNoBreaks();
+		RecordStop("frameStep");
 		break;
 	}
 	case Req::GET_CC:
 		out = {
 			{"cc", m_cpu.GetCC() },
 			};
+		break;
+
+	case Req::GET_STOP_RECORD:
+		out = m_stopRecord;
 		break;
 
 	case Req::GET_REGS:
@@ -579,6 +604,7 @@ void dev::Hardware::Reset()
 	m_cpu.Reset();
 	m_display.Reset();
 	m_audio.Reset();
+	RecordStop("reset");
 }
 
 void dev::Hardware::Restart()
@@ -587,12 +613,25 @@ void dev::Hardware::Restart()
 	m_display.Reset();
 	m_audio.Reset();
 	m_memory.Restart();
+	RecordStop("reset");
 }
 
-void dev::Hardware::Stop()
+void dev::Hardware::Stop(bool _record)
 {
 	m_status = Status::STOP;
 	m_audio.Pause(true);
+	if (_record) RecordStop("pause");
+}
+
+void dev::Hardware::RecordStop(const std::string& _reason, const nlohmann::json& _trigger)
+{
+	m_stopRecord = {
+		{"sequence", ++m_stopSequence},
+		{"reason", _reason},
+		{"pc", m_cpu.GetPC()},
+		{"globalInstructionAddress", m_memory.GetGlobalAddr(m_cpu.GetPC(), Memory::AddrSpace::RAM)}
+	};
+	for (const auto& [key, value] : _trigger.items()) m_stopRecord[key] = value;
 }
 
 // to continue execution

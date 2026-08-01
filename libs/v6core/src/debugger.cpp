@@ -118,7 +118,8 @@ bool dev::Debugger::Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP
 
 			m_debugData.MemWritesUpdate(globalAddr);
 
-			m_debugData.GetWatchpoints().Check(Watchpoint::Access::W, globalAddr, val);
+			m_debugData.GetWatchpoints().Check(
+				Watchpoint::Access::W, globalAddr, val, _memStateP->debug.beforeWrite[i]);
 
 			m_lastWritesAddrs[m_lastWritesIdx++] = globalAddr;
 			m_lastWritesIdx %= LAST_RW_MAX;
@@ -137,10 +138,40 @@ bool dev::Debugger::Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP
 		_cpuStateP, _memStateP, _ioStateP, _displayStateP);
 
 	// check watchpoint status
-	break_ |= m_debugData.GetWatchpoints().CheckBreak();
+	const auto watchpointHit = m_debugData.GetWatchpoints().GetHit();
+	const bool watchpointBreak = m_debugData.GetWatchpoints().CheckBreak();
+	break_ |= watchpointBreak;
 
 	// check breakpoints
-	break_ |= m_debugData.GetBreakpoints().Check(*_cpuStateP, *_memStateP);
+	const bool breakpointBreak = m_debugData.GetBreakpoints().Check(*_cpuStateP, *_memStateP);
+	break_ |= breakpointBreak;
+
+	if (watchpointBreak && watchpointHit) {
+		const auto access = watchpointHit->access == Watchpoint::Access::R ? "read" : "write";
+		nlohmann::json trigger = {
+			{"watchpointIds", watchpointHit->ids},
+			{"access", access},
+			{"accessedGlobalAddress", watchpointHit->globalAddr},
+			{"globalInstructionAddress", _memStateP->debug.instrGlobalAddr},
+			{"description", std::format("Watchpoint matched a {}", access)}
+		};
+		if (watchpointHit->access == Watchpoint::Access::R) {
+			trigger["observedValue"] = watchpointHit->value;
+		} else {
+			trigger["newValue"] = watchpointHit->value;
+			if (watchpointHit->oldValue) trigger["oldValue"] = *watchpointHit->oldValue;
+		}
+		m_hardware.RecordStop("watchpoint", trigger);
+	} else if (breakpointBreak) {
+		const auto address = _cpuStateP->regs.pc.word;
+		m_hardware.RecordStop("breakpoint", {
+			{"breakpointIds", {address}},
+			{"breakpointAddress", address},
+			{"description", std::format("Breakpoint at 0x{:04X}", address)}
+		});
+	} else if (break_) {
+		m_hardware.RecordStop("unknown", {{"description", "Debugger requested a stop"}});
+	}
 
 	// tracelog
 	m_traceLog.Update(*_cpuStateP, *_memStateP, *_displayStateP);
