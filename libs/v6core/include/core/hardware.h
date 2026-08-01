@@ -130,6 +130,7 @@ namespace dev
 		void Run();
 		auto GetRegs() const -> nlohmann::json;
 		auto GetByteGlobal(const nlohmann::json _globalAddrJ) -> nlohmann::json;
+		auto GetMem(const nlohmann::json _dataJ) -> nlohmann::json;
 
 		auto GetByte(const nlohmann::json _addrJ,
 					const Memory::AddrSpace _addrSpace) -> nlohmann::json;

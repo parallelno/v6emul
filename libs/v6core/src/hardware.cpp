@@ -325,6 +325,10 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		out = GetByteGlobal(dataJ);
 		break;
 
+	case Req::GET_MEM:
+		out = GetMem(dataJ);
+		break;
+
 	case Req::GET_BYTE_RAM:
 		out = GetByte(dataJ, Memory::AddrSpace::RAM);
 		break;
@@ -625,6 +629,24 @@ auto dev::Hardware::GetByteGlobal(const nlohmann::json _globalAddrJ)
 		{"data", val}
 	};
 	return out;
+}
+
+auto dev::Hardware::GetMem(const nlohmann::json _dataJ)
+-> nlohmann::json
+{
+	const auto addr = _dataJ["addr"].get<uint64_t>();
+	const auto len = _dataJ["len"].get<uint64_t>();
+	if (len == 0 || addr >= Memory::MEMORY_GLOBAL_LEN ||
+		len > Memory::MEMORY_GLOBAL_LEN - addr) {
+		throw std::out_of_range("GET_MEM range is outside global memory");
+	}
+
+	const auto* ram = m_memory.GetRam();
+	std::vector<uint8_t> data(ram->begin() + addr, ram->begin() + addr + len);
+	return {
+		{"addr", addr},
+		{"data", std::move(data)}
+	};
 }
 
 auto dev::Hardware::GetByte(const nlohmann::json _addrJ, const Memory::AddrSpace _addrSpace)

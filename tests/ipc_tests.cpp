@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "core/hardware.h"
+#include "core/debugger.h"
 #include "core/display.h"
 #include "core/fdd_consts.h"
 #include "ipc/transport.h"
@@ -340,6 +341,38 @@ static void test_memory_round_trip()
 	ctx.Close();
 }
 
+static void test_get_mem_round_trip()
+{
+	ServerContext ctx;
+	ASSERT_TRUE(ctx.Start());
+
+	TestClient client;
+	ASSERT_TRUE(client.Connect(ctx.port));
+	ctx.WaitForClient();
+	ctx.StartLoop();
+
+	const uint32_t address = dev::Memory::MEMORY_GLOBAL_LEN - 3;
+	const std::vector<uint8_t> expected = {0x12, 0x34, 0x56};
+	for (size_t index = 0; index < expected.size(); ++index) {
+		auto setResponse = client.SendRequest({
+			{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::SET_BYTE_GLOBAL)},
+			{dev::ipc::FIELD_DATA, {{"addr", address + index}, {"data", expected[index]}}}
+		});
+		ASSERT_TRUE(setResponse[dev::ipc::FIELD_OK].get<bool>());
+	}
+
+	auto getResponse = client.SendRequest({
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::GET_MEM)},
+		{dev::ipc::FIELD_DATA, {{"addr", address}, {"len", expected.size()}}}
+	});
+	ASSERT_TRUE(getResponse[dev::ipc::FIELD_OK].get<bool>());
+	ASSERT_EQ(getResponse[dev::ipc::FIELD_DATA]["addr"].get<uint32_t>(), address);
+	ASSERT_TRUE(getResponse[dev::ipc::FIELD_DATA]["data"].get<std::vector<uint8_t>>() == expected);
+
+	client.CloseSocket();
+	ctx.Close();
+}
+
 // ── Test: Run ROM and fetch frame ───────────────────────────────────
 static void test_run_and_fetch_frame()
 {
@@ -398,10 +431,11 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD), 60);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::LOAD_ROM), 91);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::MOUNT_FDD), 92);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_MEM), 93);
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(0)));
-	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(93)));
+	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(94)));
 }
 
 // ── Test: Protocol encode/decode round-trip ─────────────────────────
@@ -463,6 +497,25 @@ static void test_request_validation()
 	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {{"addr", 1.5}}}});
 	assertInvalid({{dev::ipc::FIELD_CMD, stackCommand}, {dev::ipc::FIELD_DATA, {{"addr", 65536}}}});
 
+	const auto getMemCommand = static_cast<int>(dev::Hardware::Req::GET_MEM);
+	const auto lastGlobalAddress = static_cast<uint32_t>(dev::Memory::MEMORY_GLOBAL_LEN - 1);
+	assertInvalid({{dev::ipc::FIELD_CMD, getMemCommand}, {dev::ipc::FIELD_DATA, {}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, getMemCommand}, {dev::ipc::FIELD_DATA, {{"addr", -1}, {"len", 1}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, getMemCommand}, {dev::ipc::FIELD_DATA, {{"addr", 0}, {"len", 0}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, getMemCommand}, {dev::ipc::FIELD_DATA, {{"addr", lastGlobalAddress}, {"len", 2}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, getMemCommand}, {dev::ipc::FIELD_DATA, {{"addr", dev::Memory::MEMORY_GLOBAL_LEN}, {"len", 1}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, getMemCommand}, {dev::ipc::FIELD_DATA, {{"addr", 1.5}, {"len", 1}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, getMemCommand}, {dev::ipc::FIELD_DATA, {{"addr", 0}, {"len", "1"}}}});
+
+	for (const auto [address, length] : std::vector<std::pair<uint32_t, uint32_t>>{
+		{0, 1}, {lastGlobalAddress, 1}}) {
+		auto result = dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, getMemCommand},
+			{dev::ipc::FIELD_DATA, {{"addr", address}, {"len", length}}}
+		});
+		ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(result));
+	}
+
 	for (const int address : {0, 0xFFFF}) {
 		auto result = dev::server::ValidateRequest({
 			{dev::ipc::FIELD_CMD, stackCommand},
@@ -475,6 +528,51 @@ static void test_request_validation()
 		{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_SERVER_INFO}
 	});
 	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(infoResult));
+
+	const auto watchpointAdd = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD);
+	const nlohmann::json watchpoint = {
+		{"globalAddr", 65536}, {"len", 4}, {"value", 32},
+		{"access", "RW"}, {"condition", "EQU"}, {"type", "LEN"},
+		{"active", true}, {"comment", "screen buffer"}
+	};
+	auto watchpointResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, watchpointAdd}, {dev::ipc::FIELD_DATA, watchpoint}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(watchpointResult));
+
+	auto assertInvalidWatchpoint = [&watchpoint, &assertInvalid, watchpointAdd](const nlohmann::json& patch) {
+		auto invalidData = watchpoint;
+		invalidData.update(patch);
+		assertInvalid({{dev::ipc::FIELD_CMD, watchpointAdd}, {dev::ipc::FIELD_DATA, invalidData}});
+	};
+	assertInvalidWatchpoint({{"id", 7}});
+	assertInvalidWatchpoint({{"schemaVersion", 1}});
+	assertInvalidWatchpoint({{"globalAddr", dev::Memory::MEMORY_GLOBAL_LEN}});
+	assertInvalidWatchpoint({{"len", 0}});
+	assertInvalidWatchpoint({{"value", 256}});
+	assertInvalidWatchpoint({{"access", "EXEC"}});
+	assertInvalidWatchpoint({{"condition", "="}});
+	assertInvalidWatchpoint({{"type", "WORD"}});
+	assertInvalidWatchpoint({{"active", 1}});
+	assertInvalidWatchpoint({{"comment", std::string(1025, 'x')}});
+	assertInvalidWatchpoint({{"comment", std::string("\xC3\x28", 2)}});
+	assertInvalid({{dev::ipc::FIELD_CMD, watchpointAdd},
+		{dev::ipc::FIELD_DATA, {{"data0", 0u}, {"data1", 0u}, {"comment", "legacy"}}}});
+
+	auto invalidLength = watchpoint;
+	invalidLength["len"] = 0;
+	auto fieldErrorResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, watchpointAdd},
+		{dev::ipc::FIELD_DATA, invalidLength}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(fieldErrorResult));
+	const auto& fieldError = std::get<dev::server::RequestError>(fieldErrorResult);
+	ASSERT_EQ(fieldError.details["command"].get<int>(), watchpointAdd);
+	ASSERT_EQ(fieldError.details["field"].get<std::string>(), std::string("len"));
+
+	const auto watchpointGetAll = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_GET_ALL);
+	assertInvalid({{dev::ipc::FIELD_CMD, watchpointGetAll},
+		{dev::ipc::FIELD_DATA, {{"schemaVersion", 1}}}});
 }
 
 static void test_server_info()
@@ -488,9 +586,14 @@ static void test_server_info()
 	ASSERT_EQ(info["emulatorVersion"].get<std::string>(), std::string("test-build"));
 	ASSERT_TRUE(hasCommand(dev::ipc::CMD_GET_SERVER_INFO));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_MEM)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
+	ASSERT_EQ(info["capabilities"]["watchpointSchema"].get<int>(), 1);
+	ASSERT_TRUE(!info["capabilities"].contains("legacyPackedWatchpoints"));
+	ASSERT_TRUE(info["capabilities"]["watchpointServerAllocatedIds"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["watchpointLimits"]["maxCommentBytes"].get<int>(), 1024);
 
 	auto response = dev::ipc::MakeResponse(info);
 	ASSERT_TRUE(dev::ipc::IsRawFrameServerCompatible(response));
@@ -506,6 +609,50 @@ static void test_server_info()
 	response[dev::ipc::FIELD_DATA]["protocolVersion"] = "2";
 	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(response));
 	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(nullptr));
+}
+
+static void test_structured_watchpoints()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto getAll = [&hw]() {
+		return hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_GET_ALL);
+	};
+	auto updates = [&hw]() {
+		return (*hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_GET_UPDATES))["updates"].get<uint32_t>();
+	};
+
+	auto empty = getAll();
+	ASSERT_TRUE(empty.HasValue());
+	ASSERT_TRUE(empty->is_array());
+	ASSERT_TRUE(empty->empty());
+	const auto initialUpdates = updates();
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL_ALL));
+	ASSERT_EQ(updates(), initialUpdates);
+
+	auto add = [&hw](const uint32_t address, const std::string& comment) {
+		return hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD, {
+			{"globalAddr", address}, {"len", 1}, {"value", 0x20},
+			{"access", "RW"}, {"condition", "EQU"}, {"type", "LEN"},
+			{"active", true}, {"comment", comment}
+		});
+	};
+	ASSERT_TRUE(add(0x20000, "second"));
+	ASSERT_TRUE(add(0x10000, "first"));
+
+	auto all = getAll();
+	ASSERT_TRUE(all.HasValue());
+	ASSERT_EQ(all->size(), static_cast<size_t>(2));
+	ASSERT_EQ((*all)[0]["id"].get<int>(), 0);
+	ASSERT_EQ((*all)[1]["id"].get<int>(), 1);
+	ASSERT_EQ((*all)[0]["globalAddr"].get<uint32_t>(), static_cast<uint32_t>(0x20000));
+	ASSERT_EQ((*all)[0]["condition"].get<std::string>(), std::string("EQU"));
+	ASSERT_TRUE(!(*all)[0].contains("breakL"));
+	ASSERT_TRUE(!(*all)[0].contains("breakH"));
+
+	const auto beforeMissingDelete = updates();
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL, {{"id", 999}}));
+	ASSERT_EQ(updates(), beforeMissingDelete);
 }
 
 static void test_raw_frame_codec()
@@ -729,12 +876,14 @@ int main()
 	test_response_helpers();
 	test_request_validation();
 	test_server_info();
+	test_structured_watchpoints();
 	test_raw_frame_codec();
 	test_stack_sample_words();
 	test_ping_pong();
 	test_get_regs();
 	test_malformed_request_does_not_stop_emulation();
 	test_memory_round_trip();
+	test_get_mem_round_trip();
 	test_run_and_fetch_frame();
 	test_load_rom();
 	test_mount_fdd();

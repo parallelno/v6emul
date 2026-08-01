@@ -85,8 +85,9 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 
 		auto validation = dev::server::ValidateRequest(requestJ);
 		if (auto error = std::get_if<dev::server::RequestError>(&validation)) {
-			auto errResp = dev::ipc::Encode(
-				dev::ipc::MakeErrorResponse(error->message, error->code));
+			auto errorResponse = dev::ipc::MakeErrorResponse(error->message, error->code);
+			if (!error->details.empty()) errorResponse["details"] = error->details;
+			auto errResp = dev::ipc::Encode(errorResponse);
 			server.Send(errResp);
 			continue;
 		}

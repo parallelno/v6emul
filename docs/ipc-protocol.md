@@ -41,11 +41,12 @@ On error:
 {
   "ok": false,
   "code": "invalid_request",
-  "error": "description"
+  "error": "description",
+  "details": {"command": 69, "field": "len"}
 }
 ```
 
-Error codes are stable for client branching; `error` is a human-readable diagnostic:
+Error codes are stable for client branching; `error` is a human-readable diagnostic. `details` is present when the server can identify a command-specific failing field:
 
 | Code | Meaning |
 |------|---------|
@@ -191,6 +192,35 @@ Speed values for `SET_CPU_SPEED`:
 | 18 | `GET_STACK_SAMPLE` | `{"addr": uint16}` | Object containing 11 words keyed by offsets `-10` through `10` |
 | 42 | `SET_MEM` | `{"addr": int, "data": [bytes]}` | — |
 | 43 | `SET_BYTE_GLOBAL` | `{"addr": int, "data": uint8}` | — |
+| 93 | `GET_MEM` | `{"addr": uint32, "len": uint32}` | `{"addr": uint32, "data": [bytes]}` |
+
+#### GET_MEM (cmd 93)
+
+`GET_MEM` reads a non-empty range from the global memory address space. `addr` is a global address, not a 16-bit CPU address. The range uses an inclusive start and exclusive end: `addr + len` must be less than or equal to `MEMORY_GLOBAL_LEN`.
+
+Requests with a missing field, a non-integer or negative value, `len` equal to zero, an address outside global memory, or a range that crosses the end of global memory are rejected with an `invalid_request` error.
+
+```json
+{
+  "cmd": 93,
+  "data": {
+    "addr": 1234,
+    "len": 16
+  }
+}
+```
+
+The response contains the requested bytes in address order:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "addr": 1234,
+    "data": [0, 1, 2, 3]
+  }
+}
+```
 
 #### GET_STACK_SAMPLE (cmd 18)
 
@@ -342,11 +372,49 @@ To implement save/discard for modified floppy disks:
 
 | cmd | Name | Data |
 |-----|------|------|
-| 69 | `DEBUG_WATCHPOINT_ADD` | watchpoint definition |
+| 69 | `DEBUG_WATCHPOINT_ADD` | structured watchpoint definition |
 | 70 | `DEBUG_WATCHPOINT_DEL_ALL` | — |
 | 71 | `DEBUG_WATCHPOINT_DEL` | watchpoint id |
 | 72 | `DEBUG_WATCHPOINT_GET_UPDATES` | — |
 | 73 | `DEBUG_WATCHPOINT_GET_ALL` | — |
+
+#### Structured Watchpoint Schema 1
+
+The watchpoint protocol uses structured schema 1 exclusively. An add request contains configuration only; the server allocates the ID:
+
+```json
+{
+  "globalAddr": 65536,
+  "len": 4,
+  "value": 32,
+  "access": "RW",
+  "condition": "EQU",
+  "type": "LEN",
+  "active": true,
+  "comment": "screen buffer"
+}
+```
+
+`DEBUG_WATCHPOINT_GET_ALL` returns an array of the same fields plus `id`, ordered by ascending ID. An empty collection is `[]`. Runtime match state is not serialized. Packed watchpoint representations are not accepted or returned.
+
+Schema 1 constraints:
+
+| Field | Constraint |
+|-------|------------|
+| `globalAddr` | Unsigned byte address less than `MEMORY_GLOBAL_LEN` |
+| `len` | Positive; the complete range must fit in global memory |
+| `value` | `0..255` for `LEN`; `0..65535` for `WORD` |
+| `access` | `R`, `W`, or `RW` |
+| `condition` | `ANY`, `EQU`, `LESS`, `GREATER`, `LESS_EQU`, `GREATER_EQU`, or `NOT_EQU` |
+| `type` | `LEN` or `WORD` |
+| `active` | Boolean |
+| `comment` | UTF-8 string, at most 1024 encoded bytes |
+
+Unknown fields are rejected. `WORD` requires `len = 2` and compares the low byte at `globalAddr` and high byte at `globalAddr + 1`. Comparisons are unsigned. `ANY` ignores `value`. `LEN` evaluates each accessed byte independently against the low byte of `value`. Read and write accesses are classified separately; `RW` matches either. A `WORD` may accumulate its low/high matches across instructions until a watchpoint stop resets match state.
+
+`DEBUG_WATCHPOINT_GET_UPDATES` returns a 32-bit unsigned wrapping mutation counter. Successful adds and effective deletes increment it. Rejected requests, deleting an unknown ID, and clearing an already empty collection do not. Watchpoint mutations are serialized on the emulation thread and may be requested while execution is running.
+
+Structured schema support and limits are advertised by `GET_SERVER_INFO` under `watchpointSchema`, `watchpointServerAllocatedIds`, `watchpointMutationsWhileRunning`, and `watchpointLimits`.
 
 ### Debug: Memory Edits
 

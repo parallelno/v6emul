@@ -101,4 +101,5 @@ enum class Req: int {
 
 	LOAD_ROM									= 91,
 	MOUNT_FDD									= 92,
+	GET_MEM										= 93,
 };

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <string_view>
+#include <unordered_set>
 
 #include "core/hardware.h"
 #include "ipc/commands.h"
@@ -34,7 +36,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-			command <= static_cast<int>(dev::Hardware::Req::MOUNT_FDD);
+			command <= static_cast<int>(dev::Hardware::Req::GET_MEM);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -43,6 +45,114 @@ namespace
 		if (!value.is_number_integer()) return false;
 		auto address = value.get<int64_t>();
 		return address >= 0 && address <= 0xFFFF;
+	}
+
+	auto ReadUnsigned(const nlohmann::json& value, uint64_t& result) -> bool
+	{
+		if (value.is_number_unsigned()) {
+			result = value.get<uint64_t>();
+			return true;
+		}
+		if (!value.is_number_integer()) return false;
+		const auto signedValue = value.get<int64_t>();
+		if (signedValue < 0) return false;
+		result = static_cast<uint64_t>(signedValue);
+		return true;
+	}
+
+	auto IsValidUtf8(const std::string& value) -> bool
+	{
+		for (size_t index = 0; index < value.size();) {
+			const auto first = static_cast<uint8_t>(value[index]);
+			if (first <= 0x7F) {
+				index++;
+				continue;
+			}
+
+			size_t continuationCount = 0;
+			uint32_t codePoint = 0;
+			if (first >= 0xC2 && first <= 0xDF) {
+				continuationCount = 1;
+				codePoint = first & 0x1F;
+			} else if (first >= 0xE0 && first <= 0xEF) {
+				continuationCount = 2;
+				codePoint = first & 0x0F;
+			} else if (first >= 0xF0 && first <= 0xF4) {
+				continuationCount = 3;
+				codePoint = first & 0x07;
+			} else {
+				return false;
+			}
+
+			if (index + continuationCount >= value.size()) return false;
+			for (size_t offset = 1; offset <= continuationCount; offset++) {
+				const auto continuation = static_cast<uint8_t>(value[index + offset]);
+				if ((continuation & 0xC0) != 0x80) return false;
+				codePoint = (codePoint << 6) | (continuation & 0x3F);
+			}
+			if ((continuationCount == 2 && codePoint < 0x800) ||
+				(continuationCount == 3 && codePoint < 0x10000) ||
+				(codePoint >= 0xD800 && codePoint <= 0xDFFF) || codePoint > 0x10FFFF) return false;
+			index += continuationCount + 1;
+		}
+		return true;
+	}
+
+	auto ValidateStructuredWatchpoint(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		constexpr size_t MAX_COMMENT_BYTES = 1024;
+		const std::unordered_set<std::string_view> fields = {
+			"globalAddr", "len", "value", "access",
+			"condition", "type", "active", "comment"
+		};
+		for (const auto& [name, value] : data.items()) {
+			if (!fields.contains(name)) {
+				return dev::server::RequestError{"invalid_request",
+					"DEBUG_WATCHPOINT_ADD contains unknown field: " + name,
+					{{"command", command}, {"field", name}}};
+			}
+		}
+
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+
+		uint64_t address = 0;
+		uint64_t length = 0;
+		uint64_t value = 0;
+		if (!data.contains("globalAddr") || !ReadUnsigned(data["globalAddr"], address))
+			return invalid("globalAddr", "must be an unsigned integer");
+		if (!data.contains("len") || !ReadUnsigned(data["len"], length) || length == 0)
+			return invalid("len", "must be a positive integer");
+		if (address >= dev::Memory::MEMORY_GLOBAL_LEN || length > dev::Memory::MEMORY_GLOBAL_LEN - address)
+			return invalid("len", "must define a range inside global memory");
+		if (!data.contains("value") || !ReadUnsigned(data["value"], value))
+			return invalid("value", "must be an unsigned integer");
+
+		if (!data.contains("access") || !data["access"].is_string() ||
+			(data["access"] != "R" && data["access"] != "W" && data["access"] != "RW"))
+			return invalid("access", "must be R, W, or RW");
+		if (!data.contains("condition") || !data["condition"].is_string() ||
+			!std::unordered_set<std::string>{"ANY", "EQU", "LESS", "GREATER", "LESS_EQU", "GREATER_EQU", "NOT_EQU"}.contains(data["condition"]))
+			return invalid("condition", "has an unsupported value");
+		if (!data.contains("type") || !data["type"].is_string() ||
+			(data["type"] != "LEN" && data["type"] != "WORD"))
+			return invalid("type", "must be LEN or WORD");
+		if (data["type"] == "WORD" && length != 2)
+			return invalid("len", "must be 2 for WORD watchpoints");
+		if (value > (data["type"] == "WORD" ? 0xFFFFu : 0xFFu))
+			return invalid("value", "is outside the range for the selected type");
+		if (!data.contains("active") || !data["active"].is_boolean())
+			return invalid("active", "must be boolean");
+		if (!data.contains("comment") || !data["comment"].is_string() ||
+			data["comment"].get_ref<const std::string&>().size() > MAX_COMMENT_BYTES ||
+			!IsValidUtf8(data["comment"].get_ref<const std::string&>()))
+			return invalid("comment", "must be a UTF-8 string of at most 1024 bytes");
+
+		return std::nullopt;
 	}
 }
 
@@ -78,6 +188,30 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 		}
 	}
 
+	if (command == static_cast<int>(dev::Hardware::Req::GET_MEM)) {
+		auto addressIt = data.find("addr");
+		auto lengthIt = data.find("len");
+		if (addressIt == data.end() || lengthIt == data.end() ||
+			!addressIt->is_number_unsigned() || !lengthIt->is_number_unsigned()) {
+			return RequestError{"invalid_request", "GET_MEM requires unsigned addr and len"};
+		}
+
+		const auto addr = addressIt->get<uint64_t>();
+		const auto len = lengthIt->get<uint64_t>();
+		if (len == 0 || addr >= dev::Memory::MEMORY_GLOBAL_LEN ||
+			len > dev::Memory::MEMORY_GLOBAL_LEN - addr) {
+			return RequestError{"invalid_request", "GET_MEM range must be non-empty and inside global memory"};
+		}
+	}
+
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD)) {
+		if (auto error = ValidateStructuredWatchpoint(data, command)) return *error;
+	}
+
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_GET_ALL) && !data.empty()) {
+		return RequestError{"invalid_request", "command 73 does not accept data"};
+	}
+
 	return IpcRequest{command, std::move(data)};
 }
 
@@ -90,7 +224,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::MOUNT_FDD); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::GET_MEM); ++command) {
 		commands.push_back(command);
 	}
 
@@ -102,7 +236,14 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"debugger", true},
 			{"rawFrame", true},
 			{"rawFrameSchema", 1},
-			{"stackSampleSchema", 1}
+			{"stackSampleSchema", 1},
+			{"watchpointSchema", 1},
+			{"watchpointServerAllocatedIds", true},
+			{"watchpointMutationsWhileRunning", true},
+			{"watchpointLimits", {
+				{"maxRangeLength", dev::Memory::MEMORY_GLOBAL_LEN},
+				{"maxCommentBytes", 1024}
+			}}
 		}}
 	};
 }

@@ -15,6 +15,7 @@ namespace dev::server
 	struct RequestError {
 		std::string code;
 		std::string message;
+		nlohmann::json details = nlohmann::json::object();
 	};
 
 	using RequestValidation = std::variant<IpcRequest, RequestError>;

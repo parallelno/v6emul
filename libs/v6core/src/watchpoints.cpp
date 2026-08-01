@@ -8,6 +8,7 @@
 // Hardware thread
 void dev::Watchpoints::Clear()
 {
+	if (m_wps.empty()) return;
 	m_wps.clear();
 	m_updates++;
 }
@@ -16,6 +17,7 @@ void dev::Watchpoints::Clear()
 void dev::Watchpoints::Add(Watchpoint&& _wp)
 {
 	m_updates++;
+	m_nextId = std::max(m_nextId, _wp.data.id + 1);
 
 	auto wpI = m_wps.find(_wp.data.id);
 	if (wpI != m_wps.end())
@@ -25,6 +27,15 @@ void dev::Watchpoints::Add(Watchpoint&& _wp)
 	}
 	
 	m_wps.emplace(_wp.data.id, std::move(_wp));
+}
+
+auto dev::Watchpoints::AddNew(Watchpoint&& _wp) -> Id
+{
+	while (m_wps.contains(m_nextId)) m_nextId++;
+	_wp.data.id = m_nextId++;
+	const auto id = _wp.data.id;
+	Add(std::move(_wp));
+	return id;
 }
 
 void dev::Watchpoints::Add(const nlohmann::json& _wpJ)
@@ -47,11 +58,11 @@ void dev::Watchpoints::Add(const nlohmann::json& _wpJ)
 // Hardware thread
 void dev::Watchpoints::Del(const dev::Id _id)
 {
-	m_updates++;
 	auto bpI = m_wps.find(_id);
 	if (bpI != m_wps.end())
 	{
 		m_wps.erase(bpI);
+		m_updates++;
 	}
 }
 

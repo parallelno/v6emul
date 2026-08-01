@@ -284,8 +284,17 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_WATCHPOINT_ADD: {
-		Watchpoint::Data wpData{ _reqDataJ["data0"], _reqDataJ["data1"] };
-		m_debugData.GetWatchpoints().Add({ std::move(wpData), _reqDataJ["comment"] });
+		Watchpoint::Data wpData{
+			-1,
+			Watchpoint::GetAccess(_reqDataJ["access"]),
+			_reqDataJ["globalAddr"],
+			Watchpoint::GetStructuredCondition(_reqDataJ["condition"]),
+			_reqDataJ["value"],
+			Watchpoint::GetType(_reqDataJ["type"]),
+			_reqDataJ["len"],
+			_reqDataJ["active"]
+		};
+		m_debugData.GetWatchpoints().AddNew({std::move(wpData), _reqDataJ["comment"]});
 		break;
 	}
 	case Hardware::Req::DEBUG_WATCHPOINT_GET_UPDATES:
@@ -293,13 +302,16 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_WATCHPOINT_GET_ALL:
-		for (const auto& [id, wp] : m_debugData.GetWatchpoints().GetAll())
+		out = nlohmann::json::array();
 		{
-			out.push_back({
-					{"data0", wp.data.data0},
-					{"data1", wp.data.data1},
-					{"comment", wp.comment}
-				});
+			std::vector<const Watchpoint*> watchpoints;
+			for (const auto& [id, wp] : m_debugData.GetWatchpoints().GetAll()) watchpoints.push_back(&wp);
+			std::sort(watchpoints.begin(), watchpoints.end(), [](const auto* lhs, const auto* rhs) {
+				return lhs->data.id < rhs->data.id;
+			});
+			for (const auto* wp : watchpoints) {
+				out.push_back(wp->ToJson());
+			}
 		}
 		break;
 
