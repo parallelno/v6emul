@@ -11,6 +11,8 @@
 #include "core/fdd_consts.h"
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
+#include "ipc/raw_frame.h"
+#include "ipc/server_info.h"
 #include "ipc/commands.h"
 #include "ipc_request.h"
 
@@ -482,12 +484,73 @@ static void test_server_info()
 		return std::find(info["commands"].begin(), info["commands"].end(), command) !=
 			info["commands"].end();
 	};
-	ASSERT_EQ(info["protocolVersion"].get<int>(), 1);
+	ASSERT_EQ(info["protocolVersion"].get<int>(), dev::ipc::PROTOCOL_VERSION);
 	ASSERT_EQ(info["emulatorVersion"].get<std::string>(), std::string("test-build"));
 	ASSERT_TRUE(hasCommand(dev::ipc::CMD_GET_SERVER_INFO));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
+
+	auto response = dev::ipc::MakeResponse(info);
+	ASSERT_TRUE(dev::ipc::IsRawFrameServerCompatible(response));
+	response[dev::ipc::FIELD_DATA]["protocolVersion"] = dev::ipc::PROTOCOL_VERSION - 1;
+	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(response));
+	response[dev::ipc::FIELD_DATA]["protocolVersion"] = dev::ipc::PROTOCOL_VERSION;
+	response[dev::ipc::FIELD_DATA]["capabilities"]["rawFrameSchema"] = 0;
+	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(response));
+	response[dev::ipc::FIELD_DATA]["capabilities"]["rawFrameSchema"] =
+		dev::ipc::RAW_FRAME_SCHEMA_VERSION;
+	response[dev::ipc::FIELD_DATA]["commands"] = nlohmann::json::array();
+	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(response));
+	response[dev::ipc::FIELD_DATA]["protocolVersion"] = "2";
+	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(response));
+	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(nullptr));
+}
+
+static void test_raw_frame_codec()
+{
+	const std::vector<uint8_t> pixels = {1, 2, 3, 4, 5, 6, 7, 8};
+	std::vector<uint8_t> frame;
+	ASSERT_TRUE(dev::ipc::EncodeRawFrame(frame, 2, 1, pixels.data(), pixels.size()));
+	ASSERT_EQ(frame.size(), static_cast<size_t>(4 + dev::ipc::RAW_FRAME_HEADER_SIZE + pixels.size()));
+	auto frameHeader = dev::ipc::DecodeRawFrameHeader(
+		std::span<const uint8_t>(frame.data() + 4, dev::ipc::RAW_FRAME_HEADER_SIZE));
+	ASSERT_TRUE(frameHeader.has_value());
+	ASSERT_TRUE(frameHeader->kind == dev::ipc::RawFrameKind::FRAME);
+	ASSERT_EQ(frameHeader->value0, static_cast<uint32_t>(2));
+	ASSERT_EQ(frameHeader->value1, static_cast<uint32_t>(1));
+	ASSERT_TRUE(std::equal(pixels.begin(), pixels.end(),
+		frame.begin() + 4 + dev::ipc::RAW_FRAME_HEADER_SIZE));
+	ASSERT_EQ(frame[0], static_cast<uint8_t>(dev::ipc::RAW_FRAME_HEADER_SIZE + pixels.size()));
+	ASSERT_EQ(frame[1], static_cast<uint8_t>(0));
+
+	const std::string message = "no frame available";
+	std::vector<uint8_t> error;
+	ASSERT_TRUE(dev::ipc::EncodeRawFrameError(error,
+		dev::ipc::RawFrameErrorCode::FRAME_UNAVAILABLE, message));
+	auto errorHeader = dev::ipc::DecodeRawFrameHeader(
+		std::span<const uint8_t>(error.data() + 4, dev::ipc::RAW_FRAME_HEADER_SIZE));
+	ASSERT_TRUE(errorHeader.has_value());
+	ASSERT_TRUE(errorHeader->kind == dev::ipc::RawFrameKind::ERROR_RESPONSE);
+	ASSERT_EQ(errorHeader->value0,
+		static_cast<uint32_t>(dev::ipc::RawFrameErrorCode::FRAME_UNAVAILABLE));
+	ASSERT_EQ(errorHeader->value1, static_cast<uint32_t>(message.size()));
+	ASSERT_EQ(std::string(error.begin() + 4 + dev::ipc::RAW_FRAME_HEADER_SIZE, error.end()), message);
+
+	auto invalidHeader = std::vector<uint8_t>(dev::ipc::RAW_FRAME_HEADER_SIZE, 0);
+	ASSERT_TRUE(!dev::ipc::DecodeRawFrameHeader(invalidHeader));
+
+	auto malformedHeader = std::vector<uint8_t>(
+		frame.begin() + 4, frame.begin() + 4 + dev::ipc::RAW_FRAME_HEADER_SIZE);
+	malformedHeader[4] = 2;
+	ASSERT_TRUE(!dev::ipc::DecodeRawFrameHeader(malformedHeader));
+	malformedHeader[4] = dev::ipc::RAW_FRAME_SCHEMA_VERSION;
+	malformedHeader[5] = 99;
+	ASSERT_TRUE(!dev::ipc::DecodeRawFrameHeader(malformedHeader));
+	malformedHeader[5] = static_cast<uint8_t>(dev::ipc::RawFrameKind::FRAME);
+	malformedHeader[6] = 1;
+	ASSERT_TRUE(!dev::ipc::DecodeRawFrameHeader(malformedHeader));
 }
 
 static void test_stack_sample_words()
@@ -666,6 +729,7 @@ int main()
 	test_response_helpers();
 	test_request_validation();
 	test_server_info();
+	test_raw_frame_codec();
 	test_stack_sample_words();
 	test_ping_pong();
 	test_get_regs();

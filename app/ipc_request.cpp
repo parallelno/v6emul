@@ -95,12 +95,13 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 	}
 
 	return {
-		{"protocolVersion", 1},
+		{"protocolVersion", dev::ipc::PROTOCOL_VERSION},
 		{"emulatorVersion", emulatorVersion},
 		{"commands", std::move(commands)},
 		{"capabilities", {
 			{"debugger", true},
 			{"rawFrame", true},
+			{"rawFrameSchema", 1},
 			{"stackSampleSchema", 1}
 		}}
 	};

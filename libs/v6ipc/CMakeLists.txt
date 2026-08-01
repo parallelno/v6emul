@@ -1,5 +1,7 @@
 add_library(v6ipc STATIC
     src/protocol.cpp
+    src/raw_frame.cpp
+    src/server_info.cpp
     src/transport.cpp
     src/commands.cpp
 )

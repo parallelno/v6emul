@@ -58,14 +58,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 	// Pre-encode IPC requests (reused every iteration)
 	nlohmann::json reqJ = {
 		{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_FRAME_RAW},
-		{dev::ipc::FIELD_DATA, nullptr}
+		{dev::ipc::FIELD_DATA, nlohmann::json::object()}
 	};
 	g_requestBytes = dev::ipc::Encode(reqJ);
 
 	{
 		nlohmann::json statsReqJ = {
 			{dev::ipc::FIELD_CMD, static_cast<int>(Req::GET_HW_MAIN_STATS)},
-			{dev::ipc::FIELD_DATA, nullptr}
+			{dev::ipc::FIELD_DATA, nlohmann::json::object()}
 		};
 		g_statsRequestBytes = dev::ipc::Encode(statsReqJ);
 	}

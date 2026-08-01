@@ -68,18 +68,19 @@ These use negative `cmd` values and are handled directly by the IPC server layer
 
 ### GET_SERVER_INFO Response
 
-Clients should call `GET_SERVER_INFO` during connection setup and verify `protocolVersion` and required capabilities before issuing debugger commands.
+Clients must call `GET_SERVER_INFO` during connection setup and require `protocolVersion = 2` plus the capabilities they use before issuing other commands. The server implements protocol version 2 only.
 
 ```json
 {
   "ok": true,
   "data": {
-    "protocolVersion": 1,
-    "emulatorVersion": "2026.07.29-0d7a65e",
+    "protocolVersion": 2,
+    "emulatorVersion": "2026.07.31-07dba54",
     "commands": [-5, -4, -3, -1, 1, 2],
     "capabilities": {
       "debugger": true,
       "rawFrame": true,
+      "rawFrameSchema": 1,
       "stackSampleSchema": 1
     }
   }
@@ -105,17 +106,39 @@ Standard MessagePack response containing:
 
 ### GET_FRAME_RAW Response
 
-For high-throughput frame streaming, this command returns a **raw binary** response that bypasses MessagePack encoding:
+For high-throughput frame streaming, this command returns a fixed binary envelope that bypasses MessagePack encoding. Success and failure use the same framing and can always be distinguished by `kind`:
 
 ```
-[4 bytes: payloadLen (uint32_t)] [4 bytes: width] [4 bytes: height] [payloadLen-8 bytes: raw pixels]
+[4 bytes: payloadLen] [16 bytes: header] [payloadLen-16 bytes: body]
 ```
+
+All multi-byte integers are unsigned and little-endian. The 16-byte payload header is:
+
+| Offset | Size | Field | Value |
+|--------|------|-------|-------|
+| 0 | 4 | `magic` | ASCII `V6RF` |
+| 4 | 1 | `schemaVersion` | `1` |
+| 5 | 1 | `kind` | `1` = frame, `2` = error |
+| 6 | 2 | `flags` | Reserved; must be zero |
+| 8 | 4 | `value0` | Kind-specific, described below |
+| 12 | 4 | `value1` | Kind-specific, described below |
+
+For `kind = 1` (frame), `value0` is width, `value1` is height, and the body contains exactly `width * height * 4` pixel bytes.
+
+For `kind = 2` (error), `value0` is the numeric error code, `value1` is the UTF-8 message length, and the body contains exactly that message. Defined error codes:
+
+| Code | Name | Meaning |
+|------|------|---------|
+| 1 | `FRAME_UNAVAILABLE` | No frame is currently available |
+| 2 | `INTERNAL_ERROR` | The server could not encode the frame |
 
 - Frame dimensions: 768 × 312 pixels
 - Pixel format depends on `--color-format`:
   - `abgr` (default) — bytes `[R, G, B, A]` per pixel. Native for HTML Canvas `ImageData`, WebGL, and most graphics APIs.
   - `argb` — bytes `[B, G, R, A]` per pixel. Native for Windows `BI_RGB` bitmaps (GDI `StretchDIBits`).
 - Total pixel data: 768 × 312 × 4 = 958,464 bytes
+
+`GET_FRAME_RAW` supports only this protocol-v2 envelope. There is no legacy raw-frame response mode or fallback parser.
 
 ## Hardware Commands
 
@@ -388,4 +411,4 @@ To implement save/discard for modified floppy disks:
 - TCP loopback throughput: ~700 MB/s
 - Headroom: ~14×
 
-The `GET_FRAME_RAW` command bypasses MessagePack serialization for frame data, sending raw pixels with a minimal 12-byte header.
+The `GET_FRAME_RAW` command bypasses MessagePack serialization for frame data. Its 20-byte wire prefix consists of the common 4-byte payload length and a 16-byte typed header.

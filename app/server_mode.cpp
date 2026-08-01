@@ -12,6 +12,7 @@
 #include "core/hardware.h"
 #include "ipc/transport.h"
 #include "ipc/protocol.h"
+#include "ipc/raw_frame.h"
 #include "ipc/commands.h"
 #include "ipc_request.h"
 #include "v6emul_version.h"
@@ -127,28 +128,22 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 			continue;
 		}
 
-		// Raw binary frame: [4:payloadLen][4:width][4:height][raw ABGR pixels]
-		// Bypasses json/msgpack for high-throughput frame streaming.
+		// Fixed binary envelope; both frames and errors use the same header.
 		if (cmdInt == dev::ipc::CMD_GET_FRAME_RAW) {
 			auto [pixels, region] = _hw.GetFrame(false);
+			static std::vector<uint8_t> rawMsg;
 			if (pixels) {
 				size_t pixLen = region.GetByteLen();
-				uint32_t payloadLen = static_cast<uint32_t>(8 + pixLen);
-
-				// Reuse a static buffer to avoid per-frame allocation
-				static std::vector<uint8_t> rawMsg;
-				rawMsg.resize(4 + 8 + pixLen);
-				std::memcpy(rawMsg.data(), &payloadLen, 4);
-				std::memcpy(rawMsg.data() + 4, &region.width, 4);
-				std::memcpy(rawMsg.data() + 8, &region.height, 4);
-				std::memcpy(rawMsg.data() + 12, pixels, pixLen);
-
-				server.Send(rawMsg);
+				if (!dev::ipc::EncodeRawFrame(rawMsg, region.width, region.height,
+					reinterpret_cast<const uint8_t*>(pixels), pixLen)) {
+					dev::ipc::EncodeRawFrameError(rawMsg,
+						dev::ipc::RawFrameErrorCode::INTERNAL_ERROR, "frame encoding failed");
+				}
 			} else {
-				auto errResp = dev::ipc::Encode(
-					dev::ipc::MakeErrorResponse("no frame available"));
-				server.Send(errResp);
+				dev::ipc::EncodeRawFrameError(rawMsg,
+					dev::ipc::RawFrameErrorCode::FRAME_UNAVAILABLE, "no frame available");
 			}
+			server.Send(rawMsg);
 			continue;
 		}
 

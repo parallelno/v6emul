@@ -65,7 +65,6 @@ bool ConnectToServer()
 		return false;
 	}
 
-	g_connected.store(true);
 	return true;
 }
 

@@ -4,10 +4,14 @@
 #include <Windows.h>
 
 #include <cstring>
+#include <array>
+#include <optional>
 #include <thread>
 #include <nlohmann/json.hpp>
 
 #include "ipc/protocol.h"
+#include "ipc/raw_frame.h"
+#include "ipc/server_info.h"
 #include "ipc/commands.h"
 #include "core/hardware_consts.h"
 #include "net.h"
@@ -32,6 +36,34 @@ std::vector<uint8_t>  g_statsRequestBytes;
 
 std::vector<KeyEvent> g_keyQueue;
 std::mutex            g_keyMutex;
+
+static auto ReceiveMessagePack() -> std::optional<nlohmann::json>
+{
+	uint32_t payloadLen = 0;
+	if (!RecvExact(&payloadLen, 4) || payloadLen == 0 || payloadLen > 64 * 1024 * 1024) {
+		return std::nullopt;
+	}
+
+	std::vector<uint8_t> payload(payloadLen);
+	if (!RecvExact(payload.data(), payload.size())) return std::nullopt;
+	try {
+		return dev::ipc::Decode(payload);
+	} catch (...) {
+		return std::nullopt;
+	}
+}
+
+static bool NegotiateProtocol()
+{
+	auto request = dev::ipc::Encode({
+		{dev::ipc::FIELD_CMD, dev::ipc::CMD_GET_SERVER_INFO},
+		{dev::ipc::FIELD_DATA, nlohmann::json::object()}
+	});
+	if (!SendExact(request.data(), request.size())) return false;
+
+	auto response = ReceiveMessagePack();
+	return response && dev::ipc::IsRawFrameServerCompatible(*response);
+}
 
 // ── Send queued key events ────────────────────────────────────────────
 static bool FlushKeyEvents()
@@ -96,11 +128,13 @@ void WorkerThread()
 		}
 
 		if (!g_connected.load()) {
-			if (!ConnectToServer()) {
+			if (!ConnectToServer() || !NegotiateProtocol()) {
+				Disconnect();
 				Sleep(500);
 				nextFrameTime = clock::now();
 				continue;
 			}
+			g_connected.store(true);
 		}
 
 		// Every ~1 second, request stats
@@ -111,16 +145,12 @@ void WorkerThread()
 			if (!SendExact(g_statsRequestBytes.data(), g_statsRequestBytes.size())) {
 				Disconnect(); continue;
 			}
-			uint32_t msgLen = 0;
-			if (!RecvExact(&msgLen, 4)) { Disconnect(); continue; }
-			if (msgLen == 0 || msgLen > 64 * 1024 * 1024) { Disconnect(); continue; }
-			std::vector<uint8_t> msgBuf(msgLen);
-			if (!RecvExact(msgBuf.data(), msgLen)) { Disconnect(); continue; }
-			try {
-				auto respJ = nlohmann::json::from_msgpack(msgBuf);
-				if (respJ.contains("data") && respJ["data"].contains("speedPercent"))
-					g_speedPercent.store(static_cast<int>(respJ["data"]["speedPercent"].get<double>()));
-			} catch (...) {}
+			auto response = ReceiveMessagePack();
+			if (!response) { Disconnect(); continue; }
+			auto dataIt = response->find(dev::ipc::FIELD_DATA);
+			if (dataIt != response->end() && dataIt->is_object() && dataIt->contains("speedPercent")) {
+				g_speedPercent.store(static_cast<int>((*dataIt)["speedPercent"].get<double>()));
+			}
 		}
 
 		if (!FlushKeyEvents()) { Disconnect(); continue; }
@@ -130,33 +160,44 @@ void WorkerThread()
 			Disconnect(); continue;
 		}
 
-		// Read header: [4:payloadLen][4:width][4:height]
+		// Read the fixed raw-frame envelope.
 		uint32_t payloadLen = 0;
 		if (!RecvExact(&payloadLen, 4)) { Disconnect(); continue; }
-		if (payloadLen < 8 || payloadLen > 64 * 1024 * 1024) { Disconnect(); continue; }
-
-		uint32_t width = 0, height = 0;
-		if (!RecvExact(&width,  4)) { Disconnect(); continue; }
-		if (!RecvExact(&height, 4)) { Disconnect(); continue; }
-
-		size_t pixelBytes = payloadLen - 8;
-		if (width == 0 || height == 0
-			|| width  > static_cast<uint32_t>(MAX_FRAME_W)
-			|| height > static_cast<uint32_t>(MAX_FRAME_H)
-			|| pixelBytes != static_cast<size_t>(width) * height * 4) {
+		if (payloadLen < dev::ipc::RAW_FRAME_HEADER_SIZE || payloadLen > 64 * 1024 * 1024) {
 			Disconnect(); continue;
 		}
 
-		if (!RecvExact(g_frameBack.data(), pixelBytes)) { Disconnect(); continue; }
+		std::array<uint8_t, dev::ipc::RAW_FRAME_HEADER_SIZE> headerBytes{};
+		if (!RecvExact(headerBytes.data(), headerBytes.size())) { Disconnect(); continue; }
+		auto header = dev::ipc::DecodeRawFrameHeader(headerBytes);
+		if (!header) { Disconnect(); continue; }
 
-		g_frameW.store(static_cast<int>(width));
-		g_frameH.store(static_cast<int>(height));
-		{
-			std::lock_guard lock(g_frameMutex);
-			g_frameFront.swap(g_frameBack);
+		const size_t bodyBytes = payloadLen - dev::ipc::RAW_FRAME_HEADER_SIZE;
+		if (header->kind == dev::ipc::RawFrameKind::ERROR_RESPONSE) {
+			if (header->value1 != bodyBytes) { Disconnect(); continue; }
+			std::vector<uint8_t> errorMessage(bodyBytes);
+			if (!RecvExact(errorMessage.data(), errorMessage.size())) { Disconnect(); continue; }
+		} else {
+			const uint32_t width = header->value0;
+			const uint32_t height = header->value1;
+			if (width == 0 || height == 0
+				|| width > static_cast<uint32_t>(MAX_FRAME_W)
+				|| height > static_cast<uint32_t>(MAX_FRAME_H)
+				|| bodyBytes != static_cast<size_t>(width) * height * 4) {
+				Disconnect(); continue;
+			}
+
+			if (!RecvExact(g_frameBack.data(), bodyBytes)) { Disconnect(); continue; }
+
+			g_frameW.store(static_cast<int>(width));
+			g_frameH.store(static_cast<int>(height));
+			{
+				std::lock_guard lock(g_frameMutex);
+				g_frameFront.swap(g_frameBack);
+			}
+			g_frameReady.store(true);
+			g_recvCount.fetch_add(1);
 		}
-		g_frameReady.store(true);
-		g_recvCount.fetch_add(1);
 
 		// Pace to 50 fps using absolute time tracking.
 		// Hybrid sleep+spin: sleep most of the interval, then spin the last ~2ms.

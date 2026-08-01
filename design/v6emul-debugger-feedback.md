@@ -171,12 +171,14 @@ Implemented:
 - Exceptions raised while processing a command are relayed across the thread boundary and converted to structured protocol errors while emulation remains available.
 - Error responses now include a stable `code` field while preserving the existing `ok` and `error` fields.
 - `GET_SERVER_INFO` (`cmd = -5`) reports protocol version, emulator build identity, supported command IDs, and debugger capabilities.
+- Protocol version 2 gives `GET_FRAME_RAW` a fixed magic/version/kind header for both frames and errors. The shared codec is used by the server and bundled client, and preserves the reusable frame buffer.
+- The bundled test client performs a mandatory `GET_SERVER_INFO` handshake and accepts only protocol version 2 with raw-frame schema 1 and advertised `GET_FRAME_RAW` support. Neither side retains a version 1 raw-frame path.
 - Native tests cover malformed stack addresses, 16-bit boundaries, exact words and offsets, paused/running access, and a valid request after a failed request.
 - The public protocol documentation now defines the exact stack schema, error codes, execution-state behavior, and wrapping semantics.
 
 Not implemented in this revision:
 
-- The existing `GET_STACK_SAMPLE` response shape was retained. Changing it in protocol version 1 would break working clients; `stackSampleSchema: 1` makes the current shape explicit and leaves room for a versioned replacement.
+- The existing `GET_STACK_SAMPLE` response shape was retained. `stackSampleSchema: 1` makes the current shape explicit and leaves room for a versioned replacement; protocol version 2 changes only raw-frame framing.
 - A second IPC smoke-test client was not added. The existing native IPC and end-to-end test targets are the maintainable home for backend protocol coverage; another client would duplicate transport and schema logic.
 - The real-emulator DAP harness belongs to the `v6vscode` repository because DAP lifecycle and display-tab behavior are extension responsibilities. This repository now exposes the handshake and stable failure behavior that harness needs.
 - A separate machine-readable schema was not added without a generation pipeline. Maintaining hand-written C++, Markdown, and schema copies would increase drift. The centralized validator is structured so command descriptors can become the source for generated bindings in a future protocol revision.

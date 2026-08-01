@@ -54,7 +54,7 @@ namespace dev::ipc
 		// Returns empty vector on disconnect or error.
 		auto Recv() -> std::vector<uint8_t>;
 
-		// Send a length-prefixed MessagePack message to the client.
+		// Send a length-prefixed wire message to the client.
 		// Returns true on success.
 		bool Send(const std::vector<uint8_t>& _data);
 

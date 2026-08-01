@@ -8,6 +8,8 @@
 
 namespace dev::ipc
 {
+	inline constexpr int PROTOCOL_VERSION = 2;
+
 	// Wire‐format field names
 	inline constexpr const char* FIELD_CMD   = "cmd";
 	inline constexpr const char* FIELD_DATA  = "data";
@@ -19,6 +21,6 @@ namespace dev::ipc
 	inline constexpr int CMD_PING = -1;
 	inline constexpr int CMD_PONG = -2;
 	inline constexpr int CMD_GET_FRAME = -3; // fetch raw ABGR frame buffer
-	inline constexpr int CMD_GET_FRAME_RAW = -4; // raw binary frame (no msgpack)
+	inline constexpr int CMD_GET_FRAME_RAW = -4; // typed V6RF binary envelope
 	inline constexpr int CMD_GET_SERVER_INFO = -5;
 } // namespace dev::ipc

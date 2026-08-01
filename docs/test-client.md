@@ -54,9 +54,14 @@ Left/right modifier keys (Shift, Ctrl, Alt) are distinguished using `MapVirtualK
 
 The client runs a **worker thread** that continuously:
 
-1. Sends `CMD_GET_FRAME_RAW` (`-4`) requests to the emulator
-2. Receives raw binary responses: `[4:payloadLen][4:width][4:height][ABGR pixels]`
-3. Writes pixels into a back buffer, then swaps to the front buffer under a mutex
+1. Calls `GET_SERVER_INFO` and requires protocol version 2, raw-frame schema 1, and `GET_FRAME_RAW` support
+2. Sends `CMD_GET_FRAME_RAW` (`-4`) requests to the emulator
+3. Reads the fixed `V6RF` header and branches on frame or error response kind
+4. Writes pixels into a back buffer, then swaps to the front buffer under a mutex
+
+Both success and error responses use `[4:payloadLen][16:V6RF header][body]`, so an unavailable frame cannot be mistaken for dimensions or MessagePack data. See the [IPC protocol](ipc-protocol.md#get_frame_raw-response) for the byte layout.
+
+The bundled client supports protocol version 2 only. It does not mark the TCP connection as usable and does not send frame, stats, or input requests when negotiation fails.
 
 The main (UI) thread runs a 15ms WM_TIMER that repaints whenever a new frame is ready, using `StretchDIBits` with BI_BITFIELDS for zero-copy ABGR rendering.
 
