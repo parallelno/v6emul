@@ -48,8 +48,8 @@ bool dev::Breakpoint::CheckStatus(
 	const CpuI8080::State& _cpuState, const Memory::State& _memState) const
 {
 	auto mapping = _memState.update.mapping.data & Memory::MAPPING_RAM_MODE_MASK ?
-		1 << (_memState.update.mapping.pageRam + 1 + 4 * _memState.update.ramdiskIdx):
-		1;
+		uint64_t{1} << (_memState.update.mapping.pageRam + 1 + 4 * _memState.update.ramdiskIdx):
+		uint64_t{1};
 
 	bool active = data.structured.status == Status::ACTIVE &&
 				  mapping & data.structured.memPages.data;

@@ -6,19 +6,17 @@
 
 void dev::Breakpoints::Clear()
 {
+	if (m_bps.empty()) return;
 	m_bps.clear();
 	m_updates++;
 }
 
 void dev::Breakpoints::SetStatus(const Addr _addr, const Breakpoint::Status _status)
 {
-	m_updates++;
 	auto bpI = m_bps.find(_addr);
-	if (bpI != m_bps.end()) {
-		bpI->second.data.structured.status = _status;
-		return;
-	}
-	Add(Breakpoint{ _addr });
+	if (bpI == m_bps.end() || bpI->second.data.structured.status == _status) return;
+	bpI->second.data.structured.status = _status;
+	m_updates++;
 }
 
 void dev::Breakpoints::Add(Breakpoint&& _bp )
@@ -53,11 +51,11 @@ void dev::Breakpoints::Add(const nlohmann::json& _bpJ)
 
 void dev::Breakpoints::Del(const Addr _addr)
 {
-	m_updates++;
 	auto bpI = m_bps.find(_addr);
 	if (bpI != m_bps.end())
 	{
 		m_bps.erase(bpI);
+		m_updates++;
 	}
 }
 

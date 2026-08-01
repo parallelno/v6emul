@@ -175,6 +175,8 @@ Implemented:
 - The bundled test client performs a mandatory `GET_SERVER_INFO` handshake and accepts only protocol version 2 with raw-frame schema 1 and advertised `GET_FRAME_RAW` support. Neither side retains a version 1 raw-frame path.
 - Native tests cover malformed stack addresses, 16-bit boundaries, exact words and offsets, paused/running access, and a valid request after a failed request.
 - The public protocol documentation now defines the exact stack schema, error codes, execution-state behavior, and wrapping semantics.
+- Breakpoint commands 60-68 use structured schema 1 exclusively. Native packed object layout is no longer part of the wire contract; requests are validated before dispatch and snapshots have a deterministic address order.
+- Breakpoint page mappings use the complete 33-bit mask (main RAM plus 32 RAM-disk pages), with schema and limits advertised by `GET_SERVER_INFO`.
 
 Not implemented in this revision:
 

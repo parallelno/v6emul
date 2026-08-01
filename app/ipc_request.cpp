@@ -5,6 +5,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include "core/breakpoint.h"
 #include "core/hardware.h"
 #include "ipc/commands.h"
 
@@ -154,6 +155,77 @@ namespace
 
 		return std::nullopt;
 	}
+
+	auto ValidateBreakpointAddress(const nlohmann::json& data, const int command,
+		const bool allowStatus = false) -> std::optional<dev::server::RequestError>
+	{
+		const auto expectedSize = allowStatus ? 2u : 1u;
+		if (data.size() != expectedSize || !data.contains("addr") || !IsAddress(data["addr"])) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field addr must be an integer in the range 0..65535",
+				{{"command", command}, {"field", "addr"}}};
+		}
+		if (allowStatus && (!data.contains("status") || !data["status"].is_string() ||
+			(data["status"] != "ACTIVE" && data["status"] != "DISABLED"))) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field status must be ACTIVE or DISABLED",
+				{{"command", command}, {"field", "status"}}};
+		}
+		return std::nullopt;
+	}
+
+	auto ValidateStructuredBreakpoint(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		constexpr size_t MAX_COMMENT_BYTES = 1024;
+		const std::unordered_set<std::string_view> fields = {
+			"addr", "memPages", "status", "autoDelete", "operand",
+			"condition", "value", "comment"
+		};
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+		for (const auto& [name, fieldValue] : data.items()) {
+			if (!fields.contains(name)) return invalid(name, "is not supported");
+		}
+
+		if (!data.contains("addr") || !IsAddress(data["addr"]))
+			return invalid("addr", "must be an integer in the range 0..65535");
+		uint64_t memPages = 0;
+		if (!data.contains("memPages") || !ReadUnsigned(data["memPages"], memPages) ||
+			memPages == 0 || memPages > dev::Breakpoint::MAPPING_PAGES_ALL)
+			return invalid("memPages", "must be a non-zero 33-bit mapping mask");
+		if (!data.contains("status") || !data["status"].is_string() ||
+			(data["status"] != "ACTIVE" && data["status"] != "DISABLED"))
+			return invalid("status", "must be ACTIVE or DISABLED");
+		if (!data.contains("autoDelete") || !data["autoDelete"].is_boolean())
+			return invalid("autoDelete", "must be boolean");
+
+		const std::unordered_set<std::string> operands = {
+			"A", "F", "B", "C", "D", "E", "H", "L", "PSW", "BC", "DE", "HL", "CC", "SP"
+		};
+		if (!data.contains("operand") || !data["operand"].is_string() || !operands.contains(data["operand"]))
+			return invalid("operand", "has an unsupported value");
+		if (!data.contains("condition") || !data["condition"].is_string() ||
+			dev::ParseConditionName(data["condition"].get_ref<const std::string&>()) == dev::Condition::INVALID)
+			return invalid("condition", "has an unsupported value");
+
+		uint64_t value = 0;
+		if (!data.contains("value") || !ReadUnsigned(data["value"], value))
+			return invalid("value", "must be an unsigned integer");
+		const auto& operand = data["operand"].get_ref<const std::string&>();
+		const bool byteOperand = operand.size() == 1 && operand != "F" ? true : operand == "F";
+		if (byteOperand && value > 0xFF) return invalid("value", "must fit the selected 8-bit operand");
+		if (operand != "CC" && !byteOperand && value > 0xFFFF)
+			return invalid("value", "must fit the selected 16-bit operand");
+		if (!data.contains("comment") || !data["comment"].is_string() ||
+			data["comment"].get_ref<const std::string&>().size() > MAX_COMMENT_BYTES ||
+			!IsValidUtf8(data["comment"].get_ref<const std::string&>()))
+			return invalid("comment", "must be a UTF-8 string of at most 1024 bytes");
+		return std::nullopt;
+	}
 }
 
 auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValidation
@@ -212,6 +284,24 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 		return RequestError{"invalid_request", "command 73 does not accept data"};
 	}
 
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD)) {
+		if (auto error = ValidateStructuredBreakpoint(data, command)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_DEL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_STATUS) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_ACTIVE) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_DISABLE)) {
+		if (auto error = ValidateBreakpointAddress(data, command)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_SET_STATUS)) {
+		if (auto error = ValidateBreakpointAddress(data, command, true)) return *error;
+	}
+	if ((command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_DEL_ALL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_ALL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_UPDATES)) && !data.empty()) {
+		return RequestError{"invalid_request", "command " + std::to_string(command) + " does not accept data"};
+	}
+
 	return IpcRequest{command, std::move(data)};
 }
 
@@ -237,7 +327,12 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"rawFrame", true},
 			{"rawFrameSchema", 1},
 			{"stackSampleSchema", 1},
+			{"breakpointSchema", 1},
 			{"watchpointSchema", 1},
+			{"breakpointLimits", {
+				{"mappingPageBits", 33},
+				{"maxCommentBytes", 1024}
+			}},
 			{"watchpointServerAllocatedIds", true},
 			{"watchpointMutationsWhileRunning", true},
 			{"watchpointLimits", {

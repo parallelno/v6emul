@@ -356,17 +356,53 @@ To implement save/discard for modified floppy disks:
 
 ### Debug: Breakpoints
 
-| cmd | Name | Data |
-|-----|------|------|
-| 60 | `DEBUG_BREAKPOINT_ADD` | breakpoint definition |
-| 61 | `DEBUG_BREAKPOINT_DEL` | breakpoint id |
-| 62 | `DEBUG_BREAKPOINT_DEL_ALL` | — |
-| 63 | `DEBUG_BREAKPOINT_GET_STATUS` | breakpoint id |
-| 64 | `DEBUG_BREAKPOINT_SET_STATUS` | breakpoint id + status |
-| 65 | `DEBUG_BREAKPOINT_ACTIVE` | breakpoint id |
-| 66 | `DEBUG_BREAKPOINT_DISABLE` | breakpoint id |
-| 67 | `DEBUG_BREAKPOINT_GET_ALL` | — |
-| 68 | `DEBUG_BREAKPOINT_GET_UPDATES` | — |
+| cmd | Name | Data | Response |
+|-----|------|------|----------|
+| 60 | `DEBUG_BREAKPOINT_ADD` | structured breakpoint definition | — |
+| 61 | `DEBUG_BREAKPOINT_DEL` | `{"addr": uint16}` | — |
+| 62 | `DEBUG_BREAKPOINT_DEL_ALL` | — | — |
+| 63 | `DEBUG_BREAKPOINT_GET_STATUS` | `{"addr": uint16}` | `{"status": string}` |
+| 64 | `DEBUG_BREAKPOINT_SET_STATUS` | `{"addr": uint16, "status": string}` | — |
+| 65 | `DEBUG_BREAKPOINT_ACTIVE` | `{"addr": uint16}` | — |
+| 66 | `DEBUG_BREAKPOINT_DISABLE` | `{"addr": uint16}` | — |
+| 67 | `DEBUG_BREAKPOINT_GET_ALL` | — | structured breakpoint array |
+| 68 | `DEBUG_BREAKPOINT_GET_UPDATES` | — | `{"updates": uint32}` |
+
+#### Structured Breakpoint Schema 1
+
+The breakpoint protocol uses structured schema 1 exclusively. Adding an existing address replaces its configuration:
+
+```json
+{
+  "addr": 4660,
+  "memPages": 8589934591,
+  "status": "ACTIVE",
+  "autoDelete": false,
+  "operand": "A",
+  "condition": "ANY",
+  "value": 0,
+  "comment": "interrupt entry"
+}
+```
+
+| Field | Constraint |
+|-------|------------|
+| `addr` | Unsigned 16-bit CPU address |
+| `memPages` | Non-zero 33-bit mapping mask |
+| `status` | `ACTIVE` or `DISABLED` |
+| `autoDelete` | Boolean |
+| `operand` | `A`, `F`, `B`, `C`, `D`, `E`, `H`, `L`, `PSW`, `BC`, `DE`, `HL`, `CC`, or `SP` |
+| `condition` | `ANY`, `EQU`, `LESS`, `GREATER`, `LESS_EQU`, `GREATER_EQU`, or `NOT_EQU` |
+| `value` | Unsigned; 8-bit for byte operands, 16-bit for word operands, and 64-bit for `CC` |
+| `comment` | UTF-8 string, at most 1024 encoded bytes |
+
+In `memPages`, bit 0 selects main RAM. Bit `1 + 4 * ramDisk + page` selects one of four pages in RAM disks 0 through 7. `8589934591` (`0x1FFFFFFFF`) selects every mapping. Comparisons are unsigned; `ANY` ignores `value`.
+
+`DEBUG_BREAKPOINT_GET_ALL` always returns an array ordered by ascending `addr`; an empty collection is `[]`. Packed breakpoint words are not accepted or returned. `DEBUG_BREAKPOINT_GET_STATUS` returns `ACTIVE`, `DISABLED`, or `DELETED`, where `DELETED` means no breakpoint exists at the address. Status mutation accepts only `ACTIVE` or `DISABLED`.
+
+`DEBUG_BREAKPOINT_GET_UPDATES` is a 32-bit unsigned wrapping mutation counter. Adds, replacements, effective status changes, auto-deletions, and effective deletes increment it. Rejected requests and no-op mutations do not.
+
+Support and limits are advertised by `GET_SERVER_INFO` under `breakpointSchema` and `breakpointLimits`.
 
 ### Debug: Watchpoints
 

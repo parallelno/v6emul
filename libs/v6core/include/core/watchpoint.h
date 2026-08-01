@@ -17,9 +17,6 @@ namespace dev
 {
 	static const char* wpAccessS[] = { "R", "W", "RW" };
 	static const char* wpTypesS[] = { "LEN", "WORD" };
-	static const char* wpConditionsS[] = {
-		"ANY", "EQU", "LESS", "GREATER", "LESS_EQU", "GREATER_EQU", "NOT_EQU"
-	};
 
 	struct Watchpoint
 	{
@@ -28,39 +25,35 @@ namespace dev
 		enum class Type : uint8_t { LEN = 0, WORD, COUNT };
 		enum class Access : uint8_t { R = 0, W, RW, COUNT };
 
-		static auto GetAccess(const std::string _accessS) 
+		static auto GetAccess(const std::string _accessS)
 		-> Access
-		{ 
-			for (int i = 0; i < static_cast<int>(Access::COUNT); i++) 
-			{ 
-				if (std::string(wpAccessS[i]) == _accessS) 
-				{ 
-					return static_cast<Access>(i); 
-				} 
-			} 
+		{
+			for (int i = 0; i < static_cast<int>(Access::COUNT); i++)
+			{
+				if (std::string(wpAccessS[i]) == _accessS)
+				{
+					return static_cast<Access>(i);
+				}
+			}
 			return Access::COUNT;
 		}
 
 		static auto GetType(const std::string _typeS)
-		-> Type 
+		-> Type
 		{
-			for (int i = 0; i < static_cast<int>(Type::COUNT); i++) 
-			{ 
-				if (std::string(wpTypesS[i]) == _typeS) 
-				{ 
-					return static_cast<Type>(i); 
-				} 
-			} 
+			for (int i = 0; i < static_cast<int>(Type::COUNT); i++)
+			{
+				if (std::string(wpTypesS[i]) == _typeS)
+				{
+					return static_cast<Type>(i);
+				}
+			}
 			return Type::COUNT;
 		}
 
 		static auto GetStructuredCondition(const std::string& _condition) -> Condition
 		{
-			for (int i = 0; i < static_cast<int>(Condition::INVALID); i++)
-			{
-				if (wpConditionsS[i] == _condition) return static_cast<Condition>(i);
-			}
-			return Condition::INVALID;
+			return ParseConditionName(_condition);
 		}
 
 		struct Data {
@@ -84,11 +77,11 @@ namespace dev
 				id(_id), access(_access), globalAddr(_globalAddr),
 				cond(_cond), value(_value), type(_type), len(_len), active(_active), breakH(_breakH), breakL(_breakL)
 			{};
-			Data(const nlohmann::json& _wpJ) : 
+			Data(const nlohmann::json& _wpJ) :
 				Data(_wpJ["id"],
-					GetAccess(_wpJ["access"].get<std::string>()), 
-					dev::StrHexToInt(_wpJ["globalAddr"].get<std::string>()), 
-					GetCondition(_wpJ["cond"].get<std::string>()), 
+					GetAccess(_wpJ["access"].get<std::string>()),
+					dev::StrHexToInt(_wpJ["globalAddr"].get<std::string>()),
+					GetCondition(_wpJ["cond"].get<std::string>()),
 					dev::StrHexToInt(_wpJ["value"].get<std::string>()),
 					GetType(_wpJ["type"].get<std::string>()),
 					dev::StrHexToInt(_wpJ["len"].get<std::string>()),
@@ -116,7 +109,7 @@ namespace dev
 				{"len", data.len},
 				{"value", data.value},
 				{"access", GetAccessS()},
-				{"condition", wpConditionsS[static_cast<uint8_t>(data.cond)]},
+				{"condition", ConditionNames[static_cast<uint8_t>(data.cond)]},
 				{"type", GetTypeS()},
 				{"active", data.active},
 				{"comment", comment}

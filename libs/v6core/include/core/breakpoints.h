@@ -26,6 +26,6 @@ namespace dev
 	private:
 
 		BpMap m_bps;
-		uint32_t m_updates; // counts number of updates
+		uint32_t m_updates = 0; // counts number of updates
 	};
 }

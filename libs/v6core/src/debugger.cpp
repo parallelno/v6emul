@@ -223,13 +223,19 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 
 	case Hardware::Req::DEBUG_BREAKPOINT_ADD: {
 		Breakpoint::Data bpData{
-			_reqDataJ["data0"], _reqDataJ["data1"], _reqDataJ["data2"] };
+			_reqDataJ["addr"],
+			Breakpoint::MemPages{_reqDataJ["memPages"]},
+			Breakpoint::GetStatus(_reqDataJ["status"]),
+			_reqDataJ["autoDelete"],
+			Breakpoint::GetOperand(_reqDataJ["operand"]),
+			ParseConditionName(_reqDataJ["condition"]),
+			_reqDataJ["value"] };
 		m_debugData.GetBreakpoints().Add({ std::move(bpData), _reqDataJ["comment"] });
 		break;
 	}
 	case Hardware::Req::DEBUG_BREAKPOINT_SET_STATUS:
 		m_debugData.GetBreakpoints().SetStatus(
-			 _reqDataJ["addr"], _reqDataJ["status"] );
+			 _reqDataJ["addr"], Breakpoint::GetStatus(_reqDataJ["status"]));
 		break;
 
 	case Hardware::Req::DEBUG_BREAKPOINT_ACTIVE:
@@ -245,8 +251,7 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 	case Hardware::Req::DEBUG_BREAKPOINT_GET_STATUS:
 		out = nlohmann::json{{
 				"status",
-				static_cast<uint64_t>(
-				m_debugData.GetBreakpoints().GetStatus(_reqDataJ["addr"]))
+				Breakpoint::GetStatusS(m_debugData.GetBreakpoints().GetStatus(_reqDataJ["addr"]))
 			}};
 		break;
 
@@ -258,14 +263,14 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_BREAKPOINT_GET_ALL:
-		for(const auto& [addr, bp] : m_debugData.GetBreakpoints().GetAll())
 		{
-			out.push_back( {
-					{"data0", bp.data.data0},
-					{"data1", bp.data.data1},
-					{"data2", bp.data.data2},
-					{"comment", bp.comment}
+			out = nlohmann::json::array();
+			std::vector<const Breakpoint*> breakpoints;
+			for (const auto& [addr, bp] : m_debugData.GetBreakpoints().GetAll()) breakpoints.push_back(&bp);
+			std::sort(breakpoints.begin(), breakpoints.end(), [](const auto* lhs, const auto* rhs) {
+				return lhs->data.structured.addr < rhs->data.structured.addr;
 			});
+			for (const auto* breakpoint : breakpoints) out.push_back(breakpoint->ToProtocolJson());
 		}
 		break;
 
@@ -288,7 +293,7 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 			-1,
 			Watchpoint::GetAccess(_reqDataJ["access"]),
 			_reqDataJ["globalAddr"],
-			Watchpoint::GetStructuredCondition(_reqDataJ["condition"]),
+				ParseConditionName(_reqDataJ["condition"]),
 			_reqDataJ["value"],
 			Watchpoint::GetType(_reqDataJ["type"]),
 			_reqDataJ["len"],

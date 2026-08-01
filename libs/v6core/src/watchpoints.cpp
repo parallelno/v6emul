@@ -25,7 +25,7 @@ void dev::Watchpoints::Add(Watchpoint&& _wp)
 		wpI->second.Update(std::move(_wp));
 		return;
 	}
-	
+
 	m_wps.emplace(_wp.data.id, std::move(_wp));
 }
 
@@ -51,7 +51,7 @@ void dev::Watchpoints::Add(const nlohmann::json& _wpJ)
 		wpI->second.Update(std::move(wp));
 		return;
 	}
-	
+
 	m_wps.emplace(wp.data.id, std::move(wp));
 }
 
@@ -74,7 +74,7 @@ void dev::Watchpoints::Check(const Watchpoint::Access _access, const GlobalAddr 
 		{
 			return pair.second.Check(_access, _globalAddr, _value);
 		});
-	
+
 	m_wpBreak |= wpI != m_wps.end();
 }
 

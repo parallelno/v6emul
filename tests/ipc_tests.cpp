@@ -573,6 +573,43 @@ static void test_request_validation()
 	const auto watchpointGetAll = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_GET_ALL);
 	assertInvalid({{dev::ipc::FIELD_CMD, watchpointGetAll},
 		{dev::ipc::FIELD_DATA, {{"schemaVersion", 1}}}});
+
+	const auto breakpointAdd = static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD);
+	const nlohmann::json breakpoint = {
+		{"addr", 0x1234}, {"memPages", dev::Breakpoint::MAPPING_PAGES_ALL},
+		{"status", "ACTIVE"}, {"autoDelete", false}, {"operand", "A"},
+		{"condition", "ANY"}, {"value", 0}, {"comment", "entry"}
+	};
+	auto breakpointResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, breakpointAdd}, {dev::ipc::FIELD_DATA, breakpoint}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(breakpointResult));
+	auto assertInvalidBreakpoint = [&breakpoint, &assertInvalid, breakpointAdd](const nlohmann::json& patch) {
+		auto invalidData = breakpoint;
+		invalidData.update(patch);
+		assertInvalid({{dev::ipc::FIELD_CMD, breakpointAdd}, {dev::ipc::FIELD_DATA, invalidData}});
+	};
+	assertInvalidBreakpoint({{"data0", 0u}});
+	assertInvalidBreakpoint({{"addr", 65536}});
+	assertInvalidBreakpoint({{"memPages", 0}});
+	assertInvalidBreakpoint({{"memPages", dev::Breakpoint::MAPPING_PAGES_ALL + 1}});
+	assertInvalidBreakpoint({{"status", "DELETED"}});
+	assertInvalidBreakpoint({{"autoDelete", 0}});
+	assertInvalidBreakpoint({{"operand", "Flags"}});
+	assertInvalidBreakpoint({{"condition", "="}});
+	assertInvalidBreakpoint({{"value", 256}});
+	assertInvalidBreakpoint({{"comment", std::string(1025, 'x')}});
+
+	const auto breakpointSetStatus = static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_SET_STATUS);
+	auto statusResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, breakpointSetStatus},
+		{dev::ipc::FIELD_DATA, {{"addr", 0x1234}, {"status", "DISABLED"}}}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(statusResult));
+	assertInvalid({{dev::ipc::FIELD_CMD, breakpointSetStatus},
+		{dev::ipc::FIELD_DATA, {{"addr", 0x1234}, {"status", 0}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_ALL)},
+		{dev::ipc::FIELD_DATA, {{"schemaVersion", 1}}}});
 }
 
 static void test_server_info()
@@ -590,6 +627,8 @@ static void test_server_info()
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
+	ASSERT_EQ(info["capabilities"]["breakpointSchema"].get<int>(), 1);
+	ASSERT_EQ(info["capabilities"]["breakpointLimits"]["mappingPageBits"].get<int>(), 33);
 	ASSERT_EQ(info["capabilities"]["watchpointSchema"].get<int>(), 1);
 	ASSERT_TRUE(!info["capabilities"].contains("legacyPackedWatchpoints"));
 	ASSERT_TRUE(info["capabilities"]["watchpointServerAllocatedIds"].get<bool>());
@@ -609,6 +648,72 @@ static void test_server_info()
 	response[dev::ipc::FIELD_DATA]["protocolVersion"] = "2";
 	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(response));
 	ASSERT_TRUE(!dev::ipc::IsRawFrameServerCompatible(nullptr));
+}
+
+static void test_structured_breakpoints()
+{
+	dev::Breakpoint lastRamDiskPage{
+		dev::Breakpoint::Data{
+			0x1234, dev::Breakpoint::MemPages{uint64_t{1} << 32},
+			dev::Breakpoint::Status::ACTIVE, false, dev::Breakpoint::Operand::A,
+			dev::Condition::ANY, 0
+		}
+	};
+	dev::CpuI8080::State cpuState{};
+	auto ram = std::make_unique<dev::Memory::Ram>();
+	dev::Memory::State memoryState{dev::Memory::GetGlobalAddrFunc{}, ram.get()};
+	memoryState.update.mapping.modeRamA = true;
+	memoryState.update.mapping.pageRam = 3;
+	memoryState.update.ramdiskIdx = 7;
+	ASSERT_TRUE(lastRamDiskPage.CheckStatus(cpuState, memoryState));
+	memoryState.update.mapping.data = 0;
+	ASSERT_TRUE(!lastRamDiskPage.CheckStatus(cpuState, memoryState));
+
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto getAll = [&hw]() {
+		return hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_ALL);
+	};
+	auto updates = [&hw]() {
+		return (*hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_UPDATES))["updates"].get<uint32_t>();
+	};
+	auto add = [&hw](const uint16_t address, const std::string& operand) {
+		return hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD, {
+			{"addr", address}, {"memPages", dev::Breakpoint::MAPPING_PAGES_ALL},
+			{"status", "ACTIVE"}, {"autoDelete", false}, {"operand", operand},
+			{"condition", "ANY"}, {"value", 0}, {"comment", "test"}
+		});
+	};
+
+	auto empty = getAll();
+	ASSERT_TRUE(empty.HasValue());
+	ASSERT_TRUE(empty->is_array());
+	ASSERT_TRUE(empty->empty());
+	const auto initialUpdates = updates();
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_DEL_ALL));
+	ASSERT_EQ(updates(), initialUpdates);
+
+	ASSERT_TRUE(add(0x2000, "A"));
+	ASSERT_TRUE(add(0x1000, "F"));
+	auto all = getAll();
+	ASSERT_TRUE(all.HasValue());
+	ASSERT_EQ(all->size(), static_cast<size_t>(2));
+	ASSERT_EQ((*all)[0]["addr"].get<uint16_t>(), static_cast<uint16_t>(0x1000));
+	ASSERT_EQ((*all)[1]["addr"].get<uint16_t>(), static_cast<uint16_t>(0x2000));
+	ASSERT_EQ((*all)[0]["operand"].get<std::string>(), std::string("F"));
+	ASSERT_EQ((*all)[0]["status"].get<std::string>(), std::string("ACTIVE"));
+	ASSERT_EQ((*all)[0]["memPages"].get<uint64_t>(), dev::Breakpoint::MAPPING_PAGES_ALL);
+	ASSERT_TRUE(!(*all)[0].contains("data0"));
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_SET_STATUS,
+		{{"addr", 0x1000}, {"status", "DISABLED"}}));
+	auto status = hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_STATUS, {{"addr", 0x1000}});
+	ASSERT_EQ((*status)["status"].get<std::string>(), std::string("DISABLED"));
+	const auto beforeNoOp = updates();
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_SET_STATUS,
+		{{"addr", 0x1000}, {"status", "DISABLED"}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_DEL, {{"addr", 0x9999}}));
+	ASSERT_EQ(updates(), beforeNoOp);
 }
 
 static void test_structured_watchpoints()
@@ -876,6 +981,7 @@ int main()
 	test_response_helpers();
 	test_request_validation();
 	test_server_info();
+	test_structured_breakpoints();
 	test_structured_watchpoints();
 	test_raw_frame_codec();
 	test_stack_sample_words();
