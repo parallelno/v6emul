@@ -34,7 +34,7 @@ Example response:
 Required fields:
 
 - `sequence`: monotonic stop-event sequence number.
-- `reason`: `pause`, `breakpoint`, `watchpoint`, `step`, `next`, `frameStep`, `halt`, `reset`, `exception`, or `unknown`.
+- `reason`: `pause`, `breakpoint`, `watchpoint`, `step`, `next`, `frameStep`, `exception`, or `unknown`.
 - `pc`: CPU program counter at the stop.
 - `globalInstructionAddress`: global address of the stopped instruction.
 
@@ -59,7 +59,7 @@ The record must be:
 - **Atomic:** clients never observe fields combined from different stop events.
 - **Ordered:** `sequence` increases for every new stop, independently of breakpoint and watchpoint update counters.
 
-v6emul must define the initial response before any stop has occurred and the sequence behavior across reset, restart, ROM load, attach, and reconnect.
+v6emul must define the initial response before any stop has occurred. Reset, restart, ROM load, attach, and reconnect do not stop emulation, so they preserve the latest record and sequence.
 
 Process exit and connection loss are reported by the client's process or transport lifecycle because the server may no longer be available to answer this request.
 
@@ -81,7 +81,7 @@ The `commands` list must also contain the assigned `GET_STOP_RECORD` command ID.
 
 While execution is running, v6vscode polls for a new stop sequence. When the sequence changes, it maps the record to one DAP `stopped` event:
 
-- `pause` and `halt` to the corresponding user-facing stop reason.
+- `pause` to the corresponding user-facing stop reason.
 - `breakpoint` with `hitBreakpointIds`.
 - `watchpoint` to a DAP data-breakpoint stop with the triggering watchpoint details.
 - step variants to `step`.
@@ -93,7 +93,7 @@ Adapter-generated `stopOnEntry` may remain local because it is intentionally con
 ## 6. Acceptance Criteria
 
 1. Repeated reads return the same record and sequence until another stop occurs.
-2. Manual stop, breakpoint, watchpoint, single-step, `HLT`, reset, and exception paths produce the correct reason.
+2. Manual stop, breakpoint, watchpoint, single-step, and exception paths produce the correct reason. `HLT`, reset, and restart do not create stop records because they do not stop emulation.
 3. Breakpoint and watchpoint stops include stable trigger IDs.
 4. Watchpoint stops include the matching access type and global address.
 5. Two consecutive stops produce increasing sequence numbers.

@@ -691,21 +691,20 @@ static void test_stop_record_lifecycle()
 	ASSERT_EQ(readRecord(), paused);
 
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESET));
-	const auto reset = readRecord();
-	ASSERT_EQ(reset["sequence"].get<uint64_t>(), uint64_t(2));
-	ASSERT_EQ(reset["reason"].get<std::string>(), std::string("reset"));
+	ASSERT_EQ(readRecord(), paused);
 
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
 		{{"addr", 0}, {"data", std::vector<uint8_t>{0x00, 0x76}}}));
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+	ASSERT_EQ(readRecord(), paused);
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
 	const auto stepped = readRecord();
 	ASSERT_EQ(stepped["reason"].get<std::string>(), std::string("step"));
-	ASSERT_TRUE(stepped["sequence"].get<uint64_t>() > reset["sequence"].get<uint64_t>());
+	ASSERT_EQ(stepped["sequence"].get<uint64_t>(), uint64_t(2));
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
-	const auto halted = readRecord();
-	ASSERT_EQ(halted["reason"].get<std::string>(), std::string("halt"));
-	ASSERT_TRUE(halted.contains("description"));
+	const auto haltStep = readRecord();
+	ASSERT_EQ(haltStep["reason"].get<std::string>(), std::string("step"));
+	ASSERT_EQ(haltStep["sequence"].get<uint64_t>(), uint64_t(3));
 }
 
 static void test_structured_breakpoints()

@@ -165,15 +165,15 @@ Positive `cmd` values map directly to the `Hardware::Req` enum. These are dispat
 
 ### Stop Record Schema 1
 
-`GET_STOP_RECORD` is non-consuming: repeated reads return the same object until a newer stop event replaces it. Before the first stop, it returns sequence `0`, reason `unknown`, and the initial PC/global instruction address. Sequences increase for every recorded stop for the lifetime of the emulator process. Reset, restart, and ROM auto-boot reset the emulated machine but do not reset the sequence. Attaching, reconnecting, and loading a ROM do not alter the latest record.
+`GET_STOP_RECORD` is non-consuming: repeated reads return the same object until a newer stop event replaces it. Before the first stop, it returns sequence `0`, reason `unknown`, and the initial PC/global instruction address. Sequences increase for every recorded stop for the lifetime of the emulator process. Reset, restart, ROM auto-boot, attaching, reconnecting, and loading a ROM do not alter the sequence or latest record because none of those operations stops emulation.
 
-Every response contains `sequence`, `reason`, `pc`, and `globalInstructionAddress`. Reasons are `pause`, `breakpoint`, `watchpoint`, `step`, `next`, `frameStep`, `halt`, `reset`, `exception`, or `unknown`. Trigger-specific fields are omitted when they do not apply:
+Every response contains `sequence`, `reason`, `pc`, and `globalInstructionAddress`. Reasons are `pause`, `breakpoint`, `watchpoint`, `step`, `next`, `frameStep`, `exception`, or `unknown`. Trigger-specific fields are omitted when they do not apply:
 
 - Breakpoints add `breakpointIds`, `breakpointAddress`, and optionally `description`. Breakpoint addresses are the stable breakpoint identities used in `breakpointIds`.
 - Watchpoints add sorted `watchpointIds`, `access` (`read` or `write`), `accessedGlobalAddress`, and `description`. Reads add `observedValue`; writes add `oldValue` and `newValue` when available.
 - Exceptions may add `exceptionCode` and `description`.
 
-Manual `STOP`, debugger hits, single-instruction and frame steps, `HLT`, reset/restart, and emulation exceptions each replace the record atomically on the emulation thread. Connection loss and process exit are transport/process lifecycle events and are not stop records.
+Manual `STOP`, debugger hits, single-instruction and frame steps, and emulation exceptions each replace the record atomically on the emulation thread. `HLT` changes CPU state but does not stop the emulator; reset and restart reinitialize hardware without changing run/stop status. Therefore these operations do not create stop records. Connection loss and process exit are transport/process lifecycle events and are not stop records.
 
 Speed values for `SET_CPU_SPEED`:
 

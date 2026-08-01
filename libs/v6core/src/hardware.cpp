@@ -72,11 +72,6 @@ bool dev::Hardware::ExecuteInstruction()
 
 	} while (!m_cpu.IsInstructionExecuted());
 
-	if (m_cpu.GetHLTA()) {
-		RecordStop("halt", {{"description", "HLT instruction executed"}});
-		return true;
-	}
-
 	// debug per instruction
 	if (m_debugAttached && Debug(m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP()) ) {
 		return true;
@@ -604,7 +599,6 @@ void dev::Hardware::Reset()
 	m_cpu.Reset();
 	m_display.Reset();
 	m_audio.Reset();
-	RecordStop("reset");
 }
 
 void dev::Hardware::Restart()
@@ -613,7 +607,6 @@ void dev::Hardware::Restart()
 	m_display.Reset();
 	m_audio.Reset();
 	m_memory.Restart();
-	RecordStop("reset");
 }
 
 void dev::Hardware::Stop(bool _record)
