@@ -705,6 +705,12 @@ static void test_stop_record_lifecycle()
 	const auto haltStep = readRecord();
 	ASSERT_EQ(haltStep["reason"].get<std::string>(), std::string("step"));
 	ASSERT_EQ(haltStep["sequence"].get<uint64_t>(), uint64_t(3));
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RUN));
+	const auto running = *hw->Request(dev::Hardware::Req::IS_RUNNING);
+	ASSERT_TRUE(running["isRunning"].get<bool>());
+	ASSERT_EQ(readRecord(), haltStep);
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::STOP));
 }
 
 static void test_structured_breakpoints()
