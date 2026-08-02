@@ -635,6 +635,10 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		Stop();
 		m_memory.SetRam(addr, data);
 		Restart();
+		if (DebugReqHandling) {
+			DebugReqHandling(Req::INTERNAL_REAPPLY_MEMORY_EDITS, {},
+				m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		}
 		if (autorun) Run();
 		break;
 	}

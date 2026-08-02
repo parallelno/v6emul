@@ -1,5 +1,7 @@
 #include "server_mode.h"
 
+#include "core/memory_edit.h"
+
 #include <iostream>
 #include <string>
 #include <format>
@@ -164,6 +166,15 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 		decltype(_hw.Request(req, dataJ)) result;
 		try {
 			result = _hw.Request(req, dataJ);
+		} catch (const dev::MemoryEditNotFound& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {
+				{"command", static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE)},
+				{"field", "globalAddr"},
+				{"globalAddr", error.GetGlobalAddr()}
+			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
 		} catch (const dev::WatchpointNotFound& error) {
 			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
 			errorResponse["details"] = {

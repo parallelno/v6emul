@@ -437,6 +437,8 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_HARDWARE_STATS), 96);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::SET_IO_PALETTE_ENTRY), 97);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD), 98);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL), 99);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE), 100);
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(0)));
@@ -561,6 +563,42 @@ static void test_request_validation()
 	assertInvalid({{dev::ipc::FIELD_CMD, dismountCommand}, {dev::ipc::FIELD_DATA, {{"driveIdx", 4}}}});
 	assertInvalid({{dev::ipc::FIELD_CMD, dismountCommand}, {dev::ipc::FIELD_DATA, {{"driveIdx", 0}, {"save", false}}}});
 
+	const auto memoryEditAdd = static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_ADD);
+	const nlohmann::json memoryEdit = {
+		{"globalAddr", 65536}, {"enteredValue", 42}, {"readonly", true},
+		{"active", true}, {"comment", "test"}
+	};
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, memoryEditAdd}, {dev::ipc::FIELD_DATA, memoryEdit}
+	})));
+	for (const auto& invalidEdit : std::vector<nlohmann::json>{
+		nlohmann::json{{"globalAddr", dev::Memory::MEMORY_GLOBAL_LEN}, {"enteredValue", 42}, {"readonly", true}, {"active", true}, {"comment", "test"}},
+		nlohmann::json{{"globalAddr", 0}, {"enteredValue", 256}, {"readonly", true}, {"active", true}, {"comment", "test"}},
+		nlohmann::json{{"globalAddr", 0}, {"enteredValue", 42}, {"readonly", 1}, {"active", true}, {"comment", "test"}},
+		nlohmann::json{{"globalAddr", 0}, {"enteredValue", 42}, {"readonly", true}, {"active", true}, {"comment", "test"}, {"originalValue", 1}},
+		nlohmann::json{{"globalAddr", 0}, {"enteredValue", 42}, {"readonly", true}, {"active", true}, {"comment", "test"}, {"currentValue", 1}}
+	}) {
+		assertInvalid({{dev::ipc::FIELD_CMD, memoryEditAdd}, {dev::ipc::FIELD_DATA, invalidEdit}});
+	}
+	for (const auto command : {
+		dev::Hardware::Req::DEBUG_MEMORY_EDIT_DEL,
+		dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET,
+		dev::Hardware::Req::DEBUG_MEMORY_EDIT_EXISTS,
+		dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE}) {
+		ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, {{"globalAddr", dev::Memory::MEMORY_GLOBAL_LEN - 1}}}
+		})));
+		assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, {{"globalAddr", 0}, {"extra", true}}}});
+	}
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL)},
+		{dev::ipc::FIELD_DATA, nlohmann::json::object()}
+	})));
+	assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL)},
+		{dev::ipc::FIELD_DATA, {{"extra", true}}}});
+
 	const auto watchpointAdd = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD);
 	const nlohmann::json watchpoint = {
 		{"globalAddr", 65536}, {"len", 4}, {"value", 32},
@@ -671,12 +709,18 @@ static void test_server_info()
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_HARDWARE_STATS)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::SET_IO_PALETTE_ENTRY)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["breakpointSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["breakpointLimits"]["mappingPageBits"].get<int>(), 33);
 	ASSERT_EQ(info["capabilities"]["watchpointSchema"].get<int>(), 1);
+	ASSERT_EQ(info["capabilities"]["memoryEditSchema"].get<int>(), 1);
+	ASSERT_EQ(info["capabilities"]["memoryEditLimits"]["globalAddressExclusive"].get<uint32_t>(),
+		dev::Memory::MEMORY_GLOBAL_LEN);
+	ASSERT_EQ(info["capabilities"]["memoryEditLimits"]["maxCommentBytes"].get<int>(), 1024);
 	ASSERT_EQ(info["capabilities"]["stopRecordSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["hardwareStatsSchema"].get<int>(), 1);
 	ASSERT_TRUE(info["capabilities"]["hardwareStatsWhileRunning"].get<bool>());
@@ -913,6 +957,111 @@ static void test_structured_watchpoints()
 	ASSERT_TRUE(all->empty());
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_DEL_ALL));
 	ASSERT_EQ(updates(), beforeClear + 1);
+}
+
+static void test_structured_memory_edits()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
+	auto add = [&hw](const uint32_t globalAddr, const uint8_t enteredValue,
+		const bool readonly = true, const bool active = true) {
+		return hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_ADD, {
+			{"globalAddr", globalAddr}, {"enteredValue", enteredValue},
+			{"readonly", readonly}, {"active", active}, {"comment", "test"}
+		});
+	};
+	auto current = [&hw](const uint32_t globalAddr) {
+		return hw->GetRam()->at(globalAddr);
+	};
+
+	constexpr uint32_t firstAddr = 0x1000;
+	constexpr uint32_t inactiveAddr = 0x2000;
+	constexpr uint32_t secondAddr = dev::Memory::MEMORY_MAIN_LEN + 0x20;
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_BYTE_GLOBAL,
+		{{"addr", firstAddr}, {"data", 0x11}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_BYTE_GLOBAL,
+		{{"addr", secondAddr}, {"data", 0x22}}));
+	ASSERT_TRUE(add(secondAddr, 0xBB));
+	ASSERT_TRUE(add(firstAddr, 0xAA));
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0xAA));
+	ASSERT_EQ(current(secondAddr), static_cast<uint8_t>(0xBB));
+
+	auto all = hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL);
+	ASSERT_TRUE(all.HasValue());
+	ASSERT_EQ((*all)["edits"].size(), static_cast<size_t>(2));
+	ASSERT_EQ((*all)["edits"][0]["globalAddr"].get<uint32_t>(), firstAddr);
+	ASSERT_EQ((*all)["edits"][1]["globalAddr"].get<uint32_t>(), secondAddr);
+	ASSERT_EQ((*all)["edits"][0]["originalValue"].get<uint8_t>(), static_cast<uint8_t>(0x11));
+	ASSERT_EQ((*all)["edits"][0]["currentValue"].get<uint8_t>(), static_cast<uint8_t>(0xAA));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_BYTE_GLOBAL,
+		{{"addr", inactiveAddr}, {"data", 0x33}}));
+	ASSERT_TRUE(add(inactiveAddr, 0xDD, true, false));
+	ASSERT_EQ(current(inactiveAddr), static_cast<uint8_t>(0x33));
+	ASSERT_TRUE(add(inactiveAddr, 0xDD, true, true));
+	ASSERT_EQ(current(inactiveAddr), static_cast<uint8_t>(0xDD));
+
+	ASSERT_TRUE(add(firstAddr, 0xCC, false));
+	auto updated = hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET, {{"globalAddr", firstAddr}});
+	ASSERT_EQ((*updated)["enteredValue"].get<uint8_t>(), static_cast<uint8_t>(0xCC));
+	ASSERT_EQ((*updated)["originalValue"].get<uint8_t>(), static_cast<uint8_t>(0x11));
+	ASSERT_TRUE(!(*updated)["readonly"].get<bool>());
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_BYTE_GLOBAL,
+		{{"addr", firstAddr}, {"data", 0x44}}));
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0x44));
+	ASSERT_TRUE(add(firstAddr, 0xCC, true));
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0x44));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESET));
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0x00));
+	auto retained = hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_EXISTS,
+		{{"globalAddr", firstAddr}});
+	ASSERT_TRUE((*retained)["exists"].get<bool>());
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::LOAD_ROM,
+		{{"addr", 0}, {"data", std::vector<uint8_t>{0x01, 0x02}}, {"autorun", false}}));
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0xCC));
+	ASSERT_EQ(current(secondAddr), static_cast<uint8_t>(0xBB));
+
+	const std::vector<uint8_t> cpuWriteProgram = {
+		0x3E, 0x77,
+		0x32, static_cast<uint8_t>(firstAddr & 0xFF), static_cast<uint8_t>(firstAddr >> 8),
+		0x76
+	};
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
+		{{"addr", 0}, {"data", cpuWriteProgram}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0xCC));
+	ASSERT_TRUE(add(firstAddr, 0xCC, false));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0x77));
+
+	auto restored = hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE,
+		{{"globalAddr", firstAddr}});
+	ASSERT_EQ((*restored)["restoredValue"].get<uint8_t>(), static_cast<uint8_t>(0x11));
+	ASSERT_TRUE((*restored)["deleted"].get<bool>());
+	ASSERT_EQ(current(firstAddr), static_cast<uint8_t>(0x11));
+	retained = hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_EXISTS,
+		{{"globalAddr", firstAddr}});
+	ASSERT_TRUE(!(*retained)["exists"].get<bool>());
+	auto missing = hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET,
+		{{"globalAddr", firstAddr}});
+	ASSERT_TRUE(missing.HasValue());
+	ASSERT_TRUE(missing->is_null());
+
+	bool missingRestoreRejected = false;
+	try {
+		hw->Request(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE, {{"globalAddr", firstAddr}});
+	} catch (const dev::MemoryEditNotFound&) {
+		missingRestoreRejected = true;
+	}
+	ASSERT_TRUE(missingRestoreRejected);
 }
 
 static void test_watchpoint_matching()
@@ -1417,6 +1566,7 @@ int main()
 	test_stop_record_lifecycle();
 	test_structured_breakpoints();
 	test_structured_watchpoints();
+	test_structured_memory_edits();
 	test_watchpoint_matching();
 	test_watchpoints_break_execution();
 	test_breakpoint_stop_record();

@@ -37,7 +37,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-			command <= static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD);
+			command <= static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -157,6 +157,59 @@ namespace
 			!IsValidUtf8(data["comment"].get_ref<const std::string&>()))
 			return invalid("comment", "must be a UTF-8 string of at most 1024 bytes");
 
+		return std::nullopt;
+	}
+
+	auto ValidateMemoryEditInput(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		constexpr size_t MAX_COMMENT_BYTES = 1024;
+		const std::unordered_set<std::string_view> fields = {
+			"globalAddr", "enteredValue", "readonly", "active", "comment"
+		};
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+		for (const auto& [name, fieldValue] : data.items()) {
+			if (!fields.contains(name)) return invalid(name, "is not supported");
+		}
+
+		uint64_t globalAddr = 0;
+		uint64_t enteredValue = 0;
+		if (!data.contains("globalAddr") || !ReadUnsigned(data["globalAddr"], globalAddr) ||
+			globalAddr >= dev::Memory::MEMORY_GLOBAL_LEN)
+			return invalid("globalAddr", "must be an integer inside global memory");
+		if (!data.contains("enteredValue") || !ReadUnsigned(data["enteredValue"], enteredValue) ||
+			enteredValue > 0xFF)
+			return invalid("enteredValue", "must be an integer in the range 0..255");
+		if (!data.contains("readonly") || !data["readonly"].is_boolean())
+			return invalid("readonly", "must be boolean");
+		if (!data.contains("active") || !data["active"].is_boolean())
+			return invalid("active", "must be boolean");
+		if (!data.contains("comment") || !data["comment"].is_string() ||
+			data["comment"].get_ref<const std::string&>().size() > MAX_COMMENT_BYTES ||
+			!IsValidUtf8(data["comment"].get_ref<const std::string&>()))
+			return invalid("comment", "must be a UTF-8 string of at most 1024 bytes");
+		return std::nullopt;
+	}
+
+	auto ValidateMemoryEditAddress(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+		for (const auto& [name, fieldValue] : data.items()) {
+			if (name != "globalAddr") return invalid(name, "is not supported");
+		}
+		uint64_t globalAddr = 0;
+		if (!data.contains("globalAddr") || !ReadUnsigned(data["globalAddr"], globalAddr) ||
+			globalAddr >= dev::Memory::MEMORY_GLOBAL_LEN)
+			return invalid("globalAddr", "must be an integer inside global memory");
 		return std::nullopt;
 	}
 
@@ -291,6 +344,21 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 		return RequestError{"invalid_request", "command 73 does not accept data"};
 	}
 
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_ADD)) {
+		if (auto error = ValidateMemoryEditInput(data, command)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_DEL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_EXISTS) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE)) {
+		if (auto error = ValidateMemoryEditAddress(data, command)) return *error;
+	}
+	if ((command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_DEL_ALL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL)) && !data.empty()) {
+		return RequestError{"invalid_request", "command " + std::to_string(command) + " does not accept data",
+			{{"command", command}, {"field", data.items().begin().key()}}};
+	}
+
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD)) {
 		if (auto error = ValidateStructuredBreakpoint(data, command)) return *error;
 	}
@@ -345,7 +413,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE); ++command) {
 		commands.push_back(command);
 	}
 
@@ -360,6 +428,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"stackSampleSchema", 1},
 			{"breakpointSchema", 1},
 			{"watchpointSchema", 1},
+			{"memoryEditSchema", 1},
 			{"stopRecordSchema", 1},
 			{"hardwareStatsSchema", 1},
 			{"hardwareStatsWhileRunning", true},
@@ -375,6 +444,10 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"watchpointMutationsWhileRunning", true},
 			{"watchpointLimits", {
 				{"maxRangeLength", dev::Memory::MEMORY_GLOBAL_LEN},
+				{"maxCommentBytes", 1024}
+			}},
+			{"memoryEditLimits", {
+				{"globalAddressExclusive", dev::Memory::MEMORY_GLOBAL_LEN},
 				{"maxCommentBytes", 1024}
 			}}
 		}}

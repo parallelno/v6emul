@@ -379,25 +379,79 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_MEMORY_EDIT_DEL:
-		m_debugData.DelMemoryEdit(_reqDataJ["addr"]);
+		m_debugData.DelMemoryEdit(_reqDataJ["globalAddr"]);
 		break;
 
 	case Hardware::Req::DEBUG_MEMORY_EDIT_ADD:
-		m_debugData.SetMemoryEdit(_reqDataJ);
+	{
+		const auto globalAddr = _reqDataJ["globalAddr"].get<GlobalAddr>();
+		const auto existing = m_debugData.GetMemoryEdit(globalAddr);
+		const auto originalValue = existing
+			? existing->originalValue
+			: _memStateP->ramP->at(globalAddr);
+		const auto enteredValue = _reqDataJ["enteredValue"].get<uint8_t>();
+		const auto active = _reqDataJ["active"].get<bool>();
+		const bool applyValue = active &&
+			(!existing || !existing->active || existing->enteredValue != enteredValue);
+		MemoryEdit edit{
+			globalAddr,
+			enteredValue,
+			originalValue,
+			_reqDataJ["comment"].get<std::string>(),
+			_reqDataJ["readonly"].get<bool>(),
+			active
+		};
+		m_debugData.SetMemoryEdit(edit);
+		if (applyValue) _memStateP->ramP->at(globalAddr) = edit.enteredValue;
 		break;
+	}
 
 	case Hardware::Req::DEBUG_MEMORY_EDIT_GET:
 	{
-		auto memEdit = m_debugData.GetMemoryEdit(_reqDataJ["addr"]);
+		const auto globalAddr = _reqDataJ["globalAddr"].get<GlobalAddr>();
+		auto memEdit = m_debugData.GetMemoryEdit(globalAddr);
 		if (memEdit)
 		{
-			out = { {"data", memEdit->ToJson()} };
+			out = memEdit->ToSnapshotJson(_memStateP->ramP->at(globalAddr));
 		}
+		else out = nullptr;
 		break;
 	}
 
 	case Hardware::Req::DEBUG_MEMORY_EDIT_EXISTS:
-		out = { {"data", m_debugData.GetMemoryEdit(_reqDataJ["addr"]) != nullptr } };
+		out = { {"exists", m_debugData.GetMemoryEdit(_reqDataJ["globalAddr"]) != nullptr } };
+		break;
+
+	case Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL:
+	{
+		std::vector<const MemoryEdit*> edits;
+		for (const auto& [globalAddr, edit] : m_debugData.GetMemoryEdits()) edits.push_back(&edit);
+		std::sort(edits.begin(), edits.end(), [](const auto* lhs, const auto* rhs) {
+			return lhs->globalAddr < rhs->globalAddr;
+		});
+		out["edits"] = nlohmann::json::array();
+		for (const auto* edit : edits) {
+			out["edits"].push_back(edit->ToSnapshotJson(_memStateP->ramP->at(edit->globalAddr)));
+		}
+		break;
+	}
+
+	case Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE:
+	{
+		const auto globalAddr = _reqDataJ["globalAddr"].get<GlobalAddr>();
+		const auto edit = m_debugData.GetMemoryEdit(globalAddr);
+		if (!edit) throw MemoryEditNotFound(globalAddr);
+		const auto restoredValue = edit->originalValue;
+		_memStateP->ramP->at(globalAddr) = restoredValue;
+		m_debugData.DelMemoryEdit(globalAddr);
+		out = { {"globalAddr", globalAddr}, {"restoredValue", restoredValue}, {"deleted", true} };
+		break;
+	}
+
+	case Hardware::Req::INTERNAL_REAPPLY_MEMORY_EDITS:
+		for (const auto& [globalAddr, edit] : m_debugData.GetMemoryEdits()) {
+			if (edit.active) _memStateP->ramP->at(globalAddr) = edit.enteredValue;
+		}
 		break;
 
 	//////////////////

@@ -304,10 +304,10 @@ void dev::DebugData::DelAllComments()
 	m_commentsUpdates++;
 }
 
-auto dev::DebugData::GetMemoryEdit(const Addr _addr) const
+auto dev::DebugData::GetMemoryEdit(const GlobalAddr _globalAddr) const
 -> const MemoryEdit*
 {
-	auto editsI = m_memoryEdits.find(_addr);
+	auto editsI = m_memoryEdits.find(_globalAddr);
 	return editsI != m_memoryEdits.end() ? &editsI->second : nullptr;
 }
 
@@ -317,9 +317,9 @@ void dev::DebugData::SetMemoryEdit(const MemoryEdit& _edit)
 	m_editsUpdates++;
 }
 
-void dev::DebugData::DelMemoryEdit(const Addr _addr)
+void dev::DebugData::DelMemoryEdit(const GlobalAddr _globalAddr)
 {
-	auto editI = m_memoryEdits.find(_addr);
+	auto editI = m_memoryEdits.find(_globalAddr);
 	if (editI == m_memoryEdits.end()) return;
 	m_memoryEdits.erase(editI);
 	m_editsUpdates++;
@@ -469,10 +469,12 @@ void dev::DebugData::LoadDebugData(const std::string& _path)
 	if (debugDataJ.contains("memoryEdits")) {
 		for (auto& editJ : debugDataJ["memoryEdits"])
 		{
-			MemoryEdit edit{ editJ };
+			const auto globalAddr = dev::StrHexToInt(editJ["globalAddr"].get<std::string>());
+			MemoryEdit edit = MemoryEdit::FromStorageJson(
+				editJ, m_hardware.GetRam()->at(globalAddr));
 			m_memoryEdits.emplace(edit.globalAddr, edit);
 			// inject memory edits
-			if (edit.active) m_hardware.Request(Hardware::Req::SET_BYTE_GLOBAL, { {"addr", edit.globalAddr}, {"data", edit.value} });
+			if (edit.active) m_hardware.Request(Hardware::Req::SET_BYTE_GLOBAL, { {"addr", edit.globalAddr}, {"data", edit.enteredValue} });
 		}
 	}
 
@@ -560,7 +562,7 @@ void dev::DebugData::SaveDebugData()
 	auto& debugMemoryEdits = debugDataJ["memoryEdits"];
 	for (const auto& [addr, memoryEdit] : m_memoryEdits)
 	{
-		debugMemoryEdits.push_back(memoryEdit.ToJson());
+		debugMemoryEdits.push_back(memoryEdit.ToStorageJson());
 	}
 
 	// update code perfs

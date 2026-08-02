@@ -488,9 +488,53 @@ Structured schema support and limits are advertised by `GET_SERVER_INFO` under `
 |-----|------|------|
 | 74 | `DEBUG_MEMORY_EDIT_ADD` | edit definition |
 | 75 | `DEBUG_MEMORY_EDIT_DEL_ALL` | — |
-| 76 | `DEBUG_MEMORY_EDIT_DEL` | edit id |
-| 77 | `DEBUG_MEMORY_EDIT_GET` | edit id |
-| 78 | `DEBUG_MEMORY_EDIT_EXISTS` | edit id |
+| 76 | `DEBUG_MEMORY_EDIT_DEL` | global address |
+| 77 | `DEBUG_MEMORY_EDIT_GET` | global address |
+| 78 | `DEBUG_MEMORY_EDIT_EXISTS` | global address |
+| 99 | `DEBUG_MEMORY_EDIT_GET_ALL` | — |
+| 100 | `DEBUG_MEMORY_EDIT_RESTORE` | global address |
+
+#### Structured Memory Edit Schema 1
+
+`DEBUG_MEMORY_EDIT_ADD` adds or replaces the record identified by `globalAddr`. Its request data is:
+
+```json
+{
+  "globalAddr": 65536,
+  "enteredValue": 42,
+  "readonly": true,
+  "active": true,
+  "comment": "screen byte"
+}
+```
+
+`globalAddr` is an integer in the range advertised by `memoryEditLimits.globalAddressExclusive`; `enteredValue` is an integer in `0..255`; `readonly` and `active` are Booleans; and `comment` is valid UTF-8 of at most `memoryEditLimits.maxCommentBytes` encoded bytes. Unknown fields are rejected. In particular, clients cannot supply the server-owned `originalValue` or `currentValue` fields.
+
+On the first add at an address, the server captures the current byte as `originalValue`. Replacing that record preserves its original value. Adding an active record, updating its entered value while active, or changing it from inactive to active immediately writes `enteredValue`. An inactive record remains stored but does not apply or enforce its value. Deactivation does not restore memory.
+
+An active non-readonly record applies its entered value once; later writes may replace it. An active readonly record rejects subsequent emulated CPU writes at that global address. Direct memory requests, reset, and restart are not intercepted and do not reapply records. ROM loading reapplies every active record after the ROM data is loaded.
+
+`DEBUG_MEMORY_EDIT_GET` accepts `{ "globalAddr": integer }` and returns a `MemoryEditSnapshot` when the record exists or `null` otherwise. `DEBUG_MEMORY_EDIT_GET_ALL` accepts no data and returns `{ "edits": MemoryEditSnapshot[] }`, ordered by ascending global address. Each snapshot is sampled on the emulation thread and has this shape:
+
+```json
+{
+  "globalAddr": 65536,
+  "enteredValue": 42,
+  "originalValue": 17,
+  "currentValue": 42,
+  "readonly": true,
+  "active": true,
+  "comment": "screen byte"
+}
+```
+
+`originalValue` and `currentValue` are read-only. Keeping `currentValue` in each snapshot associates it directly with its record rather than relying on a separate positionally matched collection.
+
+`DEBUG_MEMORY_EDIT_DEL` accepts `{ "globalAddr": integer }` and removes the record without modifying memory. `DEBUG_MEMORY_EDIT_DEL_ALL` removes every record without modifying memory. `DEBUG_MEMORY_EDIT_EXISTS` accepts the same address data and returns `{ "exists": Boolean }`.
+
+`DEBUG_MEMORY_EDIT_RESTORE` accepts `{ "globalAddr": integer }`, atomically writes `originalValue`, deletes the record, and returns `{ "globalAddr": integer, "restoredValue": byte, "deleted": true }`. A missing record returns `invalid_request` with `details.command = 100` and `details.field = "globalAddr"`.
+
+Records survive reset, restart, ROM loading, and TCP reconnect. They are cleared when the emulator process exits. Support and limits are advertised by `GET_SERVER_INFO` under `memoryEditSchema` and `memoryEditLimits`.
 
 ### Debug: Code Performance
 

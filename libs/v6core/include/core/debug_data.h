@@ -62,9 +62,10 @@ namespace dev
 		void DelAllComments();
 		void GetFilteredComments(FilteredElements& _out, const std::string& _filter = "") const;
 
-		auto GetMemoryEdit(const Addr _addr) const -> const MemoryEdit*;
+		auto GetMemoryEdit(const GlobalAddr _globalAddr) const -> const MemoryEdit*;
+		auto GetMemoryEdits() const -> const MemoryEdits& { return m_memoryEdits; }
 		void SetMemoryEdit(const MemoryEdit& _edit);
-		void DelMemoryEdit(const Addr _addr);
+		void DelMemoryEdit(const GlobalAddr _globalAddr);
 		void DelAllMemoryEdits();
 		void GetFilteredMemoryEdits(FilteredElements& _out, const std::string& _filter = "") const;
 
