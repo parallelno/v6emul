@@ -1386,6 +1386,27 @@ static void test_hardware_statistics_and_mutations()
 	ASSERT_EQ(newSessionStats["lastRunCycles"].get<uint64_t>(), uint64_t(0));
 }
 
+static void test_io_port_data_is_256_byte_binary()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+
+	for (const auto command : {
+		dev::Hardware::Req::GET_IO_PORTS_IN_DATA,
+		dev::Hardware::Req::GET_IO_PORTS_OUT_DATA}) {
+		const auto response = dev::ipc::MakeResponse(*hw->Request(command));
+		const auto encoded = dev::ipc::Encode(response);
+		const std::vector<uint8_t> payload(encoded.begin() + 4, encoded.end());
+		const auto decoded = dev::ipc::Decode(payload);
+		const auto& data = decoded[dev::ipc::FIELD_DATA];
+
+		ASSERT_EQ(data.size(), (size_t)1);
+		ASSERT_TRUE(data["bytes"].is_binary());
+		const auto bytes = data["bytes"].get<nlohmann::json::binary_t>();
+		ASSERT_EQ(bytes.size(), (size_t)256);
+		ASSERT_TRUE(std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0; }));
+	}
+}
+
 int main()
 {
 	test_hardware_command_ids();
@@ -1411,6 +1432,7 @@ int main()
 	test_mount_fdd();
 	test_fdd_persistence();
 	test_hardware_statistics_and_mutations();
+	test_io_port_data_is_256_byte_binary();
 
 	std::cout << "IPC Tests: " << tests_passed << "/" << tests_run << " passed";
 	if (tests_failed > 0) {

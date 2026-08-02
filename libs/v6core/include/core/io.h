@@ -92,27 +92,8 @@ namespace dev
 #pragma pack(pop)
 
 		// debug only info
-		union PortsData {
-			struct {
-				uint64_t data0;
-				uint64_t data1;
-				uint64_t data2;
-				uint64_t data3;
-				uint64_t data4;
-				uint64_t data5;
-				uint64_t data6;
-				uint64_t data7;
-			};
-			uint8_t data[256];
-			PortsData(
-				uint64_t _data0, uint64_t _data1, uint64_t _data2, uint64_t _data3,
-				uint64_t _data4, uint64_t _data5, uint64_t _data6, uint64_t _data7)
-				:
-				data0(_data0), data1(_data1), data2(_data2), data3(_data3),
-				data4(_data4), data5(_data5), data6(_data6), data7(_data7) {}
-			PortsData() :
-				data0(0), data1(0), data2(0), data3(0),
-				data4(0), data5(0), data6(0), data7(0) {};
+		struct PortsData {
+			std::array<uint8_t, 256> data{};
 		};
 
 	private:

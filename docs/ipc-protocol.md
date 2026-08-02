@@ -280,8 +280,8 @@ Each response value is a little-endian 16-bit word beginning at `addr + offset`.
 | cmd | Name | Data | Response |
 |-----|------|------|----------|
 | 29 | `GET_IO_PORTS` | — | `{"data": int}` |
-| 30 | `GET_IO_PORTS_IN_DATA` | — | `{"data0"..."data7"}` |
-| 31 | `GET_IO_PORTS_OUT_DATA` | — | `{"data0"..."data7"}` |
+| 30 | `GET_IO_PORTS_IN_DATA` | — | `{"bytes": binary(256)}` |
+| 31 | `GET_IO_PORTS_OUT_DATA` | — | `{"bytes": binary(256)}` |
 | 32 | `GET_IO_DISPLAY_MODE` | — | `{"data": int}` |
 | 33 | `GET_IO_PALETTE` | — | `{"low", "hi"}` |
 | 34 | `GET_IO_PALETTE_COMMIT_TIME` | — | `{"paletteCommitTime": int}` |

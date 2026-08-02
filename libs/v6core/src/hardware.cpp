@@ -480,33 +480,15 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 			};
 		break;
 
-	case Req::GET_IO_PORTS_IN_DATA:
-	{
-		auto portsData = m_io.GetPortsInData();
-		out = {
-			{"data0", portsData->data0},
-			{"data1", portsData->data1},
-			{"data2", portsData->data2},
-			{"data3", portsData->data3},
-			{"data4", portsData->data4},
-			{"data5", portsData->data5},
-			{"data6", portsData->data6},
-			{"data7", portsData->data7},
-			};
-		break;
-	}
+	case Req::GET_IO_PORTS_IN_DATA: [[fallthrough]];
 	case Req::GET_IO_PORTS_OUT_DATA:
 	{
-		auto portsData = m_io.GetPortsOutData();
+		const auto portsData = req == Req::GET_IO_PORTS_IN_DATA
+			? m_io.GetPortsInData()
+			: m_io.GetPortsOutData();
 		out = {
-			{"data0", portsData->data0},
-			{"data1", portsData->data1},
-			{"data2", portsData->data2},
-			{"data3", portsData->data3},
-			{"data4", portsData->data4},
-			{"data5", portsData->data5},
-			{"data6", portsData->data6},
-			{"data7", portsData->data7},
+			{"bytes", nlohmann::json::binary_t(
+				std::vector<uint8_t>(portsData->data.begin(), portsData->data.end()))},
 			};
 		break;
 	}
