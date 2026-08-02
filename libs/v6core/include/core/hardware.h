@@ -71,6 +71,7 @@ namespace dev
 			const std::string& _pathRamDiskData,
 			const bool _ramDiskClearAfterRestart);
 		~Hardware();
+		void BeginSession();
 		auto Request(
 			const Req _req, const nlohmann::json& _dataJ = {})
 			-> Result <nlohmann::json>;
@@ -99,6 +100,14 @@ namespace dev
 		std::thread m_executionThread;
 		std::thread m_reqHandlingThread;
 		std::atomic<Status> m_status;
+		uint64_t m_sessionId = 0;
+		uint64_t m_cycleOffset = 0;
+		uint64_t m_frameOffset = 0;
+		uint64_t m_sessionStartCycles = 0;
+		uint64_t m_sessionStartFrames = 0;
+		uint64_t m_runStartCycles = 0;
+		uint64_t m_lastRunCycles = 0;
+		std::chrono::steady_clock::time_point m_sessionStartTime;
 		uint64_t m_stopSequence = 0;
 		nlohmann::json m_stopRecord;
 		struct RequestResult {
@@ -122,6 +131,8 @@ namespace dev
 		};
 
 		void Init();
+		auto GetTotalCycles() const -> uint64_t;
+		auto GetTotalFrames() const -> uint64_t;
 		void Execution();
 		bool ExecuteInstruction();
 		void ExecuteFrameNoBreaks();

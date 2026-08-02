@@ -155,6 +155,7 @@ namespace dev
 		inline auto GetPaletteCommitTimer() const -> int { return m_state.paletteCommitTimer; };
 		inline auto GetPaletteCommitTime() const -> int { return m_paletteCommitTime; };
 		inline void SetPaletteCommitTime(const int _paletteCommitTime) { m_paletteCommitTime = _paletteCommitTime; };
+		inline void SetPaletteEntry(const uint8_t _idx, const uint8_t _hwColor) { m_state.palette.bytes[_idx] = _hwColor; };
 
 		auto GetState() const -> const State& { return m_state; };
 		auto GetStateP() -> State* { return &m_state; };

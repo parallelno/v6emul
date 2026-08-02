@@ -434,10 +434,13 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_MEM), 93);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT), 94);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD), 95);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::GET_HARDWARE_STATS), 96);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::SET_IO_PALETTE_ENTRY), 97);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD), 98);
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(0)));
-	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(96)));
+	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(99)));
 }
 
 // ── Test: Protocol encode/decode round-trip ─────────────────────────
@@ -536,6 +539,27 @@ static void test_request_validation()
 	})));
 	assertInvalid({{dev::ipc::FIELD_CMD, stopRecordCommand},
 		{dev::ipc::FIELD_DATA, {{"consume", true}}}});
+
+	const auto statsCommand = static_cast<int>(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, statsCommand}, {dev::ipc::FIELD_DATA, nlohmann::json::object()}
+	})));
+	assertInvalid({{dev::ipc::FIELD_CMD, statsCommand}, {dev::ipc::FIELD_DATA, {{"schema", 1}}}});
+
+	const auto paletteCommand = static_cast<int>(dev::Hardware::Req::SET_IO_PALETTE_ENTRY);
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, paletteCommand}, {dev::ipc::FIELD_DATA, {{"index", 15}, {"hwColor", 255}}}
+	})));
+	assertInvalid({{dev::ipc::FIELD_CMD, paletteCommand}, {dev::ipc::FIELD_DATA, {{"index", 16}, {"hwColor", 0}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, paletteCommand}, {dev::ipc::FIELD_DATA, {{"index", 0}, {"hwColor", 256}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, paletteCommand}, {dev::ipc::FIELD_DATA, {{"index", 0}, {"hwColor", 1}, {"extra", true}}}});
+
+	const auto dismountCommand = static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD);
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, dismountCommand}, {dev::ipc::FIELD_DATA, {{"driveIdx", 3}}}
+	})));
+	assertInvalid({{dev::ipc::FIELD_CMD, dismountCommand}, {dev::ipc::FIELD_DATA, {{"driveIdx", 4}}}});
+	assertInvalid({{dev::ipc::FIELD_CMD, dismountCommand}, {dev::ipc::FIELD_DATA, {{"driveIdx", 0}, {"save", false}}}});
 
 	const auto watchpointAdd = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD);
 	const nlohmann::json watchpoint = {
@@ -644,6 +668,9 @@ static void test_server_info()
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_MEM)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_HARDWARE_STATS)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::SET_IO_PALETTE_ENTRY)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
@@ -651,6 +678,9 @@ static void test_server_info()
 	ASSERT_EQ(info["capabilities"]["breakpointLimits"]["mappingPageBits"].get<int>(), 33);
 	ASSERT_EQ(info["capabilities"]["watchpointSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stopRecordSchema"].get<int>(), 1);
+	ASSERT_EQ(info["capabilities"]["hardwareStatsSchema"].get<int>(), 1);
+	ASSERT_TRUE(info["capabilities"]["hardwareStatsWhileRunning"].get<bool>());
+	ASSERT_TRUE(!info["capabilities"]["runningHardwareMutations"].get<bool>());
 	ASSERT_TRUE(!info["capabilities"].contains("legacyPackedWatchpoints"));
 	ASSERT_TRUE(info["capabilities"]["watchpointServerAllocatedIds"].get<bool>());
 	ASSERT_TRUE(info["capabilities"]["watchpointEdit"].get<bool>());
@@ -1284,6 +1314,78 @@ static void test_fdd_persistence()
 	ctx.Close();
 }
 
+static void test_hardware_statistics_and_mutations()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+
+	auto stats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_TRUE(stats["sessionId"].get<uint64_t>() > 0);
+	ASSERT_EQ(stats["palette"].size(), (size_t)16);
+	ASSERT_EQ(stats["fdc"]["drives"].size(), (size_t)4);
+	ASSERT_EQ(stats["cpuCycles"].get<uint64_t>(), uint64_t(0));
+	ASSERT_EQ(stats["lastRunCycles"].get<uint64_t>(), uint64_t(0));
+
+	auto paletteResult = *hw->Request(dev::Hardware::Req::SET_IO_PALETTE_ENTRY,
+		{{"index", 5}, {"hwColor", 0xFD}});
+	ASSERT_EQ(paletteResult["index"].get<int>(), 5);
+	ASSERT_EQ(paletteResult["hwColor"].get<int>(), 0xFD);
+	stats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_EQ(stats["palette"][5].get<int>(), 0xFD);
+
+	std::vector<uint8_t> disk(FDD_SIZE, 0xA5);
+	hw->Request(dev::Hardware::Req::MOUNT_FDD,
+		{{"data", disk}, {"driveIdx", 0}, {"path", "stats.fdd"}, {"autoBoot", false}});
+	auto dismountResult = *hw->Request(dev::Hardware::Req::DISMOUNT_FDD, {{"driveIdx", 0}});
+	ASSERT_TRUE(!dismountResult["mounted"].get<bool>());
+	hw->Request(dev::Hardware::Req::DISMOUNT_FDD, {{"driveIdx", 0}});
+	stats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_TRUE(!stats["fdc"]["drives"][0]["mounted"].get<bool>());
+	ASSERT_EQ(stats["fdc"]["drives"][0]["path"].get<std::string>(), std::string(""));
+	ASSERT_EQ(stats["fdc"]["selectedDrive"].get<int>(), 0);
+
+	hw->Request(dev::Hardware::Req::RUN);
+	std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	const auto runningStats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_TRUE(runningStats["cpuCycles"].get<uint64_t>() > 0);
+	ASSERT_EQ(runningStats["palette"].size(), (size_t)16);
+	ASSERT_EQ(runningStats["fdc"]["drives"].size(), (size_t)4);
+	bool paletteRejected = false;
+	try {
+		hw->Request(dev::Hardware::Req::SET_IO_PALETTE_ENTRY, {{"index", 0}, {"hwColor", 1}});
+	} catch (const std::runtime_error&) {
+		paletteRejected = true;
+	}
+	ASSERT_TRUE(paletteRejected);
+	bool dismountRejected = false;
+	try {
+		hw->Request(dev::Hardware::Req::DISMOUNT_FDD, {{"driveIdx", 0}});
+	} catch (const std::runtime_error&) {
+		dismountRejected = true;
+	}
+	ASSERT_TRUE(dismountRejected);
+	hw->Request(dev::Hardware::Req::STOP);
+	const auto stoppedStats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	const auto lastRunCycles = stoppedStats["lastRunCycles"].get<uint64_t>();
+	ASSERT_TRUE(lastRunCycles > 0);
+	const auto repeatedStats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_EQ(repeatedStats["lastRunCycles"].get<uint64_t>(), lastRunCycles);
+
+	const auto cyclesBeforeReset = repeatedStats["cpuCycles"].get<uint64_t>();
+	const auto framesBeforeReset = repeatedStats["frameNumber"].get<uint64_t>();
+	hw->Request(dev::Hardware::Req::RESET);
+	const auto resetStats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_EQ(resetStats["cpuCycles"].get<uint64_t>(), cyclesBeforeReset);
+	ASSERT_EQ(resetStats["frameNumber"].get<uint64_t>(), framesBeforeReset);
+
+	const auto oldSessionId = resetStats["sessionId"].get<uint64_t>();
+	hw->BeginSession();
+	const auto newSessionStats = *hw->Request(dev::Hardware::Req::GET_HARDWARE_STATS);
+	ASSERT_TRUE(newSessionStats["sessionId"].get<uint64_t>() > oldSessionId);
+	ASSERT_EQ(newSessionStats["cpuCycles"].get<uint64_t>(), uint64_t(0));
+	ASSERT_EQ(newSessionStats["frameNumber"].get<uint64_t>(), uint64_t(0));
+	ASSERT_EQ(newSessionStats["lastRunCycles"].get<uint64_t>(), uint64_t(0));
+}
+
 int main()
 {
 	test_hardware_command_ids();
@@ -1308,6 +1410,7 @@ int main()
 	test_load_rom();
 	test_mount_fdd();
 	test_fdd_persistence();
+	test_hardware_statistics_and_mutations();
 
 	std::cout << "IPC Tests: " << tests_passed << "/" << tests_run << " passed";
 	if (tests_failed > 0) {

@@ -104,4 +104,8 @@ enum class Req: int {
 	GET_MEM										= 93,
 	DEBUG_WATCHPOINT_EDIT						= 94,
 	GET_STOP_RECORD								= 95,
+	GET_HARDWARE_STATS							= 96,
+	SET_IO_PALETTE_ENTRY						= 97,
+	DISMOUNT_FDD								= 98,
+	INTERNAL_BEGIN_SESSION						= -6,
 };

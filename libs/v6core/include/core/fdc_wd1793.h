@@ -28,6 +28,7 @@ namespace dev
 
 		FDisk();
 		void Mount(const std::vector<uint8_t>& _data, const std::string& _path);
+		void Dismount();
 		auto GetData() -> uint8_t*;
 		auto GetDisk() -> FDisk*;
 	};
@@ -35,13 +36,13 @@ namespace dev
 	class Fdc1793
 	{
 	public:
-		enum class Port : int { 
-			COMMAND = 0, 
-			STATUS = 0, 
-			TRACK = 1, 
-			SECTOR = 2, 
-			DATA = 3, 
-			READY = 4, 
+		enum class Port : int {
+			COMMAND = 0,
+			STATUS = 0,
+			TRACK = 1,
+			SECTOR = 2,
+			DATA = 3,
+			READY = 4,
 			SYSTEM = 4
 		};
 
@@ -65,7 +66,7 @@ namespace dev
 			size_t writes;
 			bool mounted = false;
 		};
-		
+
 		static constexpr int DRIVES_MAX = 4;
 
 	private:
@@ -91,9 +92,11 @@ namespace dev
 	public:
 		Fdc1793();
 		void Mount(const int _driveIdx, const std::vector<uint8_t>& _data, const std::string& _path);
+		void Dismount(const int _driveIdx);
 		auto Read(const Port _port) -> uint8_t;
 		auto Write(const Port _port, uint8_t _val) -> uint8_t;
 		auto GetFdcInfo() -> Info;
+		auto GetSelectedDrive() const -> uint8_t { return m_drive; }
 		auto GetFddInfo(const int _driveIdx) -> DiskInfo;
 		auto GetFddImage(const int _driveIdx) -> const std::vector<uint8_t>;
 		void ResetUpdate(const int _driveIdx);

@@ -25,6 +25,12 @@ void dev::FDisk::Mount(const std::vector<uint8_t>& _data, const std::string& _pa
 	reads = writes = 0;
 }
 
+void dev::FDisk::Dismount()
+{
+	mounted = false;
+	path.clear();
+}
+
 auto dev::FDisk::GetData()
 -> uint8_t*
 { return mounted ? data : nullptr; };
@@ -272,7 +278,7 @@ uint8_t dev::Fdc1793::Write(const Port _reg, uint8_t _val)
 		case 0x90: // READ-SECTORS
 			// Seek to the requested sector
 			m_ptr = Seek(
-				_val & C_SIDECOMP ? !!(_val & C_SIDE) : m_side, 
+				_val & C_SIDECOMP ? !!(_val & C_SIDE) : m_side,
 				m_regs[1], m_regs[2]);
 
 			// If seek successful, set up reading operation
@@ -295,7 +301,7 @@ uint8_t dev::Fdc1793::Write(const Port _reg, uint8_t _val)
 		case 0xB0: // WRITE-SECTORS
 			// Seek to the requested sector
 			m_ptr = Seek(
-				_val & C_SIDECOMP ? !!(_val & C_SIDE) : m_side, 
+				_val & C_SIDECOMP ? !!(_val & C_SIDE) : m_side,
 				m_regs[1], m_regs[2]
 			);
 			// If seek successful, set up writing operation
@@ -426,6 +432,16 @@ void dev::Fdc1793::Mount(const int _driveIdx, const std::vector<uint8_t>& _data,
 {
 	m_disks[_driveIdx % DRIVES_MAX].Mount(_data, _path);
 	if (_driveIdx == m_drive) Reset();
+}
+
+void dev::Fdc1793::Dismount(const int _driveIdx)
+{
+	m_disks[_driveIdx].Dismount();
+	if (_driveIdx == m_drive) {
+		m_disk = nullptr;
+		m_ptr = nullptr;
+		m_rwLen = 0;
+	}
 }
 
 auto dev::Fdc1793::GetFdcInfo()

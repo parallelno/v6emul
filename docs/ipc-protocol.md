@@ -286,6 +286,9 @@ Each response value is a little-endian 16-bit word beginning at `addr + offset`.
 | 33 | `GET_IO_PALETTE` | — | `{"low", "hi"}` |
 | 34 | `GET_IO_PALETTE_COMMIT_TIME` | — | `{"paletteCommitTime": int}` |
 | 35 | `SET_IO_PALETTE_COMMIT_TIME` | `{"paletteCommitTime": int}` | — |
+| 97 | `SET_IO_PALETTE_ENTRY` | `{"index": 0..15, "hwColor": 0..255}` | echoes `index` and `hwColor` |
+
+`SET_IO_PALETTE_ENTRY` accepts exactly the two fields shown, requires stopped hardware, and updates the selected raw `BBGGGRRR` palette byte immediately without changing palette commit timing.
 
 ### Memory Mapping
 
@@ -302,6 +305,7 @@ Each response value is a little-endian 16-bit word beginning at `addr + offset`.
 | cmd | Name | Data | Response |
 |-----|------|------|----------|
 | 45 | `GET_HW_MAIN_STATS` | — | See below |
+| 96 | `GET_HARDWARE_STATS` | `{}` | Hardware statistics schema 1 |
 
 `GET_HW_MAIN_STATS` returns:
 
@@ -324,6 +328,10 @@ Each response value is a little-endian 16-bit word beginning at `addr + offset`.
 
 ```
 
+`GET_HARDWARE_STATS` is the non-legacy schema and is valid while hardware is stopped or running. It is captured by one request on the emulation thread; while running, dispatch occurs at an instruction boundary without stopping execution. The response contains session identity/uptime, monotonic `cpuCycles`, latched `lastRunCycles`, raster/frame state, CPU interrupt state, exactly 16 raw palette bytes, RAM-disk mapping, and exactly four FDD entries. `GET_SERVER_INFO` advertises this behavior as `hardwareStatsWhileRunning: true`.
+
+Counters survive `RESET` and `RESTART` within a connection and reset when a new client session begins. `lastRunCycles` is latched only when running execution stops, so repeated stopped reads return the same value. All counters are 64-bit and requests fail before a value exceeds JavaScript's maximum safe integer; a future bigint schema is required beyond that limit.
+
 ### FDC / Floppy
 
 | cmd | Name | Data | Response |
@@ -335,6 +343,7 @@ Each response value is a little-endian 16-bit word beginning at `addr + offset`.
 | 49 | `RESET_UPDATE_FDD` | `{"driveIdx": int}` | — |
 | 91 | `LOAD_ROM` | `{"data": [bytes], "addr": int, "autorun": bool}` | — |
 | 92 | `MOUNT_FDD` | `{"data": [bytes], "driveIdx": int, "path": string, "autoBoot": bool}` | — |
+| 98 | `DISMOUNT_FDD` | `{"driveIdx": 0..3}` | `{"driveIdx": int, "mounted": false}` |
 
 #### LOAD_ROM (cmd 91)
 
@@ -352,6 +361,10 @@ High-level floppy disk mounting command. Pads/truncates `data` to the standard F
 - `driveIdx` — drive index 0–3 (default `0`)
 - `path` — original file path for display purposes
 - `autoBoot` — if `true`, performs `RESET` (enables boot ROM) and starts emulation (default `false`)
+
+#### DISMOUNT_FDD (cmd 98)
+
+Requires stopped hardware and accepts exactly `driveIdx`. Dismounting an empty drive is idempotent. It clears mounted state and path without saving or discarding dirty disk bytes. Dismounting the selected drive leaves the selected-drive register unchanged and makes subsequent reads behave as no media present.
 
 #### FDD Persistence Workflow
 

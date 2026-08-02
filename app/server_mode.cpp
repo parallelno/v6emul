@@ -56,6 +56,7 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 				std::cerr << "Error: failed to accept client" << std::endl;
 				continue;
 			}
+			_hw.BeginSession();
 			std::cout << "Client connected" << std::endl;
 		}
 

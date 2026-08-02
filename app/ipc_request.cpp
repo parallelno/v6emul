@@ -37,7 +37,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-			command <= static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD);
+			command <= static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -310,6 +310,29 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 		return RequestError{"invalid_request", "command " + std::to_string(command) + " does not accept data"};
 	}
 
+	if (command == static_cast<int>(dev::Hardware::Req::GET_HARDWARE_STATS) && !data.empty()) {
+		return RequestError{"invalid_request", "GET_HARDWARE_STATS does not accept data"};
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::SET_IO_PALETTE_ENTRY)) {
+		uint64_t index = 0;
+		uint64_t hwColor = 0;
+		if (data.size() != 2 || !data.contains("index") || !ReadUnsigned(data["index"], index) || index > 15) {
+			return RequestError{"invalid_request", "SET_IO_PALETTE_ENTRY index must be an integer in the range 0..15",
+				{{"command", command}, {"field", "index"}}};
+		}
+		if (!data.contains("hwColor") || !ReadUnsigned(data["hwColor"], hwColor) || hwColor > 255) {
+			return RequestError{"invalid_request", "SET_IO_PALETTE_ENTRY hwColor must be an integer in the range 0..255",
+				{{"command", command}, {"field", "hwColor"}}};
+		}
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD)) {
+		uint64_t driveIdx = 0;
+		if (data.size() != 1 || !data.contains("driveIdx") || !ReadUnsigned(data["driveIdx"], driveIdx) || driveIdx > 3) {
+			return RequestError{"invalid_request", "DISMOUNT_FDD driveIdx must be an integer in the range 0..3",
+				{{"command", command}, {"field", "driveIdx"}}};
+		}
+	}
+
 	return IpcRequest{command, std::move(data)};
 }
 
@@ -322,7 +345,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD); ++command) {
 		commands.push_back(command);
 	}
 
@@ -338,6 +361,11 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"breakpointSchema", 1},
 			{"watchpointSchema", 1},
 			{"stopRecordSchema", 1},
+			{"hardwareStatsSchema", 1},
+			{"hardwareStatsWhileRunning", true},
+			{"paletteEntryMutation", true},
+			{"fddDismount", true},
+			{"runningHardwareMutations", false},
 			{"breakpointLimits", {
 				{"mappingPageBits", 33},
 				{"maxCommentBytes", 1024}

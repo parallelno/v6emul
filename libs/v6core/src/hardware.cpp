@@ -1,6 +1,20 @@
 #include "core/hardware.h"
 #include "utils/str_utils.h"
 
+#include <atomic>
+
+namespace
+{
+	constexpr uint64_t MAX_SAFE_INTEGER = 9007199254740991ULL;
+	std::atomic<uint64_t> nextSessionId = 0;
+
+	auto SafeCounter(const uint64_t value) -> uint64_t
+	{
+		if (value > MAX_SAFE_INTEGER) throw std::overflow_error("hardware statistics require a bigint schema");
+		return value;
+	}
+}
+
 dev::Hardware::Hardware(const std::string& _pathBootData,
 		const std::string& _pathRamDiskData, const bool _ramDiskClearAfterRestart)
 	:
@@ -20,6 +34,11 @@ dev::Hardware::Hardware(const std::string& _pathBootData,
 	m_display(m_memory, m_io)
 {
 	Init();
+	m_sessionId = ++nextSessionId;
+	m_sessionStartCycles = GetTotalCycles();
+	m_sessionStartFrames = GetTotalFrames();
+	m_runStartCycles = m_sessionStartCycles;
+	m_sessionStartTime = std::chrono::steady_clock::now();
 	m_stopRecord = {
 		{"sequence", 0},
 		{"reason", "unknown"},
@@ -27,6 +46,21 @@ dev::Hardware::Hardware(const std::string& _pathBootData,
 		{"globalInstructionAddress", m_memory.GetGlobalAddr(m_cpu.GetPC(), Memory::AddrSpace::RAM)}
 	};
 	m_executionThread = std::thread(&Hardware::Execution, this);
+}
+
+void dev::Hardware::BeginSession()
+{
+	Request(Req::INTERNAL_BEGIN_SESSION);
+}
+
+auto dev::Hardware::GetTotalCycles() const -> uint64_t
+{
+	return m_cycleOffset + m_cpu.GetCC();
+}
+
+auto dev::Hardware::GetTotalFrames() const -> uint64_t
+{
+	return m_frameOffset + m_display.GetFrameNum();
 }
 
 dev::Hardware::~Hardware()
@@ -191,6 +225,15 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 
 	switch (req)
 	{
+	case Req::INTERNAL_BEGIN_SESSION:
+		m_sessionId = ++nextSessionId;
+		m_sessionStartCycles = GetTotalCycles();
+		m_sessionStartFrames = GetTotalFrames();
+		m_runStartCycles = m_sessionStartCycles;
+		m_lastRunCycles = 0;
+		m_sessionStartTime = std::chrono::steady_clock::now();
+		break;
+
 	case Req::RUN:
 		Run();
 		break;
@@ -507,6 +550,60 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 			}
 		break;
 	}
+	case Req::GET_HARDWARE_STATS:
+	{
+		const auto uptimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - m_sessionStartTime).count();
+		const auto& memoryState = m_memory.GetState();
+		const auto* palette = m_io.GetPalette();
+		nlohmann::json drives = nlohmann::json::array();
+		for (int driveIdx = 0; driveIdx < Fdc1793::DRIVES_MAX; ++driveIdx) {
+			const auto drive = m_fdc.GetFddInfo(driveIdx);
+			drives.push_back({
+				{"mounted", drive.mounted},
+				{"path", drive.path},
+				{"updated", drive.updated}
+			});
+		}
+		nlohmann::json paletteBytes = nlohmann::json::array();
+		for (int index = 0; index < IO::PALETTE_LEN; ++index) paletteBytes.push_back(palette->bytes[index]);
+		out = {
+			{"sessionId", SafeCounter(m_sessionId)},
+			{"uptimeMs", SafeCounter(static_cast<uint64_t>(uptimeMs))},
+			{"cpuCycles", SafeCounter(GetTotalCycles() - m_sessionStartCycles)},
+			{"lastRunCycles", SafeCounter(m_lastRunCycles)},
+			{"rasterPixel", m_display.GetRasterPixel()},
+			{"rasterLine", m_display.GetRasterLine()},
+			{"frameCycles", (m_display.GetRasterPixel() + m_display.GetRasterLine() * Display::FRAME_W) / 4},
+			{"frameNumber", SafeCounter(GetTotalFrames() - m_sessionStartFrames)},
+			{"displayMode", m_io.GetDisplayMode()},
+			{"scrollVertical", m_display.GetScrollVert()},
+			{"rusLat", (m_io.GetRusLatHistory() & 0b1000) != 0},
+			{"inte", m_cpu.GetState().ints.inte},
+			{"iff", m_cpu.GetState().ints.iff},
+			{"hlta", m_cpu.GetState().ints.hlta},
+			{"palette", std::move(paletteBytes)},
+			{"ramDisk", {
+				{"index", memoryState.update.ramdiskIdx},
+				{"mapping", memoryState.update.mapping.data}
+			}},
+			{"fdc", {
+				{"selectedDrive", m_fdc.GetSelectedDrive()},
+				{"drives", std::move(drives)}
+			}}
+		};
+		break;
+	}
+	case Req::SET_IO_PALETTE_ENTRY:
+		if (m_status == Status::RUN) throw std::runtime_error("palette mutation requires stopped hardware");
+		m_io.SetPaletteEntry(dataJ["index"], dataJ["hwColor"]);
+		out = {{"index", dataJ["index"]}, {"hwColor", dataJ["hwColor"]}};
+		break;
+	case Req::DISMOUNT_FDD:
+		if (m_status == Status::RUN) throw std::runtime_error("FDD mutation requires stopped hardware");
+		m_fdc.Dismount(dataJ["driveIdx"]);
+		out = {{"driveIdx", dataJ["driveIdx"]}, {"mounted", false}};
+		break;
 	case Req::IS_MEMROM_ENABLED:
 		out = {
 			{"data", m_memory.IsRomEnabled() },
@@ -595,6 +692,8 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 
 void dev::Hardware::Reset()
 {
+	m_cycleOffset += m_cpu.GetCC();
+	m_frameOffset += m_display.GetFrameNum();
 	Init();
 	m_cpu.Reset();
 	m_display.Reset();
@@ -603,6 +702,8 @@ void dev::Hardware::Reset()
 
 void dev::Hardware::Restart()
 {
+	m_cycleOffset += m_cpu.GetCC();
+	m_frameOffset += m_display.GetFrameNum();
 	m_cpu.Reset();
 	m_display.Reset();
 	m_audio.Reset();
@@ -611,6 +712,7 @@ void dev::Hardware::Restart()
 
 void dev::Hardware::Stop(bool _record)
 {
+	if (m_status == Status::RUN) m_lastRunCycles = GetTotalCycles() - m_runStartCycles;
 	m_status = Status::STOP;
 	m_audio.Pause(true);
 	if (_record) RecordStop("pause");
@@ -630,6 +732,7 @@ void dev::Hardware::RecordStop(const std::string& _reason, const nlohmann::json&
 // to continue execution
 void dev::Hardware::Run()
 {
+	if (m_status != Status::RUN) m_runStartCycles = GetTotalCycles();
 	m_status = Status::RUN;
 	m_audio.Pause(false);
 }
