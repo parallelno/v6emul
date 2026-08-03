@@ -959,6 +959,39 @@ static void test_structured_watchpoints()
 	ASSERT_EQ(updates(), beforeClear + 1);
 }
 
+static void test_code_perfs_use_generated_ids()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto add = [&hw](const std::string& label) {
+		return hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_ADD, {
+			{"label", label}, {"addrStart", "0x1000"},
+			{"addrEnd", "0x1010"}, {"active", true}
+		});
+	};
+
+	auto first = add("first");
+	auto second = add("second");
+	ASSERT_TRUE(first.HasValue());
+	ASSERT_TRUE(second.HasValue());
+	ASSERT_EQ((*first)["id"].get<dev::Id>(), 0);
+	ASSERT_EQ((*second)["id"].get<dev::Id>(), 1);
+
+	auto firstRecord = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET, {{"id", 0}});
+	auto secondRecord = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET, {{"id", 1}});
+	ASSERT_EQ((*firstRecord)["data"]["label"].get<std::string>(), std::string("first"));
+	ASSERT_EQ((*secondRecord)["data"]["label"].get<std::string>(), std::string("second"));
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_DEL, {{"id", 0}}));
+	auto firstExists = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_EXISTS, {{"id", 0}});
+	auto secondExists = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_EXISTS, {{"id", 1}});
+	ASSERT_TRUE(!(*firstExists)["data"].get<bool>());
+	ASSERT_TRUE((*secondExists)["data"].get<bool>());
+
+	auto third = add("third");
+	ASSERT_EQ((*third)["id"].get<dev::Id>(), 2);
+}
+
 static void test_structured_memory_edits()
 {
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
@@ -1566,6 +1599,7 @@ int main()
 	test_stop_record_lifecycle();
 	test_structured_breakpoints();
 	test_structured_watchpoints();
+	test_code_perfs_use_generated_ids();
 	test_structured_memory_edits();
 	test_watchpoint_matching();
 	test_watchpoints_break_execution();

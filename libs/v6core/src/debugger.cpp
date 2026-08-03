@@ -465,16 +465,16 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_CODE_PERF_DEL:
-		m_debugData.DelCodePerf(_reqDataJ["addr"]);
+		m_debugData.DelCodePerf(_reqDataJ["id"]);
 		break;
 
 	case Hardware::Req::DEBUG_CODE_PERF_ADD:
-		m_debugData.SetCodePerf(_reqDataJ);
+		out = { {"id", m_debugData.SetCodePerf(_reqDataJ)} };
 		break;
 
 	case Hardware::Req::DEBUG_CODE_PERF_GET:
 	{
-		auto codePerf = m_debugData.GetCodePerf(_reqDataJ["addr"]);
+		auto codePerf = m_debugData.GetCodePerf(_reqDataJ["id"]);
 		if (codePerf)
 		{
 			out = { {"data", codePerf->ToJson()} };
@@ -483,7 +483,7 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 	}
 
 	case Hardware::Req::DEBUG_CODE_PERF_EXISTS:
-		out = { {"data", m_debugData.GetCodePerf(_reqDataJ["addr"]) != nullptr } };
+		out = { {"data", m_debugData.GetCodePerf(_reqDataJ["id"]) != nullptr } };
 		break;
 
 	//////////////////

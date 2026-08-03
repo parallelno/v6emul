@@ -32,7 +32,7 @@ namespace dev
 		// injects the value into the memory while loading
 
 		using MemoryEdits = std::unordered_map<GlobalAddr, MemoryEdit>;
-		using CodePerfs = std::unordered_map<Addr, CodePerf>;
+		using CodePerfs = std::unordered_map<Id, CodePerf>;
 
 		DebugData(Hardware& _hardware);
 
@@ -69,14 +69,11 @@ namespace dev
 		void DelAllMemoryEdits();
 		void GetFilteredMemoryEdits(FilteredElements& _out, const std::string& _filter = "") const;
 
-		auto GetCodePerf(const Addr _addr) const -> const CodePerf*;
-		void SetCodePerf(const CodePerf& _codePerf);
-		void DelCodePerf(const Addr _addr);
+		auto GetCodePerf(const Id _id) const -> const CodePerf*;
+		auto SetCodePerf(const CodePerf& _codePerf) -> Id;
+		void DelCodePerf(const Id _id);
 		void DelAllCodePerfs();
-		void GetFilteredCodePerfs(FilteredElements& _out, const std::string& _filter = "") const;
 		auto CheckCodePerfs(const Addr _addrStart, const uint64_t _cc) -> bool;
-
-		void GetFilteredScripts(FilteredElements& _out, const std::string& _filter = "");
 
 		auto GetCommentsUpdates() const -> UpdateId { return m_commentsUpdates; };
 		auto GetLabelsUpdates() const -> UpdateId { return m_labelsUpdates; };
@@ -88,8 +85,6 @@ namespace dev
 		auto GetWatchpoints() -> Watchpoints& { return m_watchpoints; };
 		auto GetScripts() -> Scripts& { return m_scripts; };
 
-		void LoadDebugData(const std::string& _path);
-		void SaveDebugData();
 		auto GetPath() const -> const std::string& { return m_debugPath; };
 
 		inline void MemRunsUpdate(const GlobalAddr _globalAddr) { m_memRuns[_globalAddr]++; };
@@ -131,6 +126,7 @@ namespace dev
 		UpdateId m_commentsUpdates = 0;
 		UpdateId m_editsUpdates = 0;
 		UpdateId m_codePerfsUpdates = 0;
+		Id m_nextCodePerfId = 0;
 
 		using MemStats = std::array<uint64_t, Memory::MEMORY_GLOBAL_LEN>;
 		MemStats m_memRuns;
