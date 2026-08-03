@@ -350,12 +350,31 @@ auto dev::DebugData::GetCodePerf(const Id _id) const
 	return codePerfI != m_codePerfs.end() ? &codePerfI->second : nullptr;
 }
 
-auto dev::DebugData::SetCodePerf(const CodePerf& _codePerf) -> Id
+auto dev::DebugData::AddCodePerf(const CodePerf& _codePerf) -> Id
 {
-	const auto id = m_nextCodePerfId++;
+	if (m_codePerfs.size() >= CodePerf::MAX_RECORDS)
+		throw CodePerfAddError(CodePerfAddFailure::CAPACITY);
+	if (m_codePerfIdsExhausted)
+		throw CodePerfAddError(CodePerfAddFailure::ID_EXHAUSTED);
+
+	const auto id = m_nextCodePerfId;
+	if (m_nextCodePerfId == std::numeric_limits<Id>::max())
+		m_codePerfIdsExhausted = true;
+	else
+		m_nextCodePerfId++;
 	m_codePerfs.emplace(id, _codePerf);
 	m_codePerfsUpdates++;
 	return id;
+}
+
+auto dev::DebugData::EditCodePerf(const Id _id, const CodePerf& _codePerf)
+-> const CodePerf&
+{
+	auto codePerfI = m_codePerfs.find(_id);
+	if (codePerfI == m_codePerfs.end()) throw CodePerfNotFound(_id);
+	codePerfI->second.Edit(_codePerf);
+	m_codePerfsUpdates++;
+	return codePerfI->second;
 }
 
 void dev::DebugData::DelCodePerf(const Id _id)
@@ -368,10 +387,15 @@ void dev::DebugData::DelCodePerf(const Id _id)
 
 void dev::DebugData::DelAllCodePerfs()
 {
+	if (m_codePerfs.empty()) return;
 	m_codePerfs.clear();
 	m_codePerfsUpdates++;
 }
 
+void dev::DebugData::CancelCodePerfSamples()
+{
+	for (auto& [id, codePerf] : m_codePerfs) codePerf.CancelSample();
+}
 
 auto dev::DebugData::CheckCodePerfs(const Addr _addrStart, const uint64_t _cc) -> bool
 {

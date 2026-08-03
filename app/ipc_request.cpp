@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include "core/breakpoint.h"
+#include "core/code_perf.h"
 #include "core/hardware.h"
 #include "ipc/commands.h"
 
@@ -37,7 +38,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-			command <= static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE);
+			command <= static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -213,6 +214,59 @@ namespace
 		return std::nullopt;
 	}
 
+	auto ValidateCodePerfInput(const nlohmann::json& data, const int command,
+		const bool requireId = false) -> std::optional<dev::server::RequestError>
+	{
+		const std::unordered_set<std::string_view> fields = {
+			"name", "addrStart", "addrEnd", "active"
+		};
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+		for (const auto& [name, fieldValue] : data.items()) {
+			if (!fields.contains(name) && !(requireId && name == "id"))
+				return invalid(name, "is not supported");
+		}
+
+		uint64_t id = 0;
+		if (requireId && (!data.contains("id") || !ReadUnsigned(data["id"], id) ||
+			id > static_cast<uint64_t>(std::numeric_limits<dev::Id>::max())))
+			return invalid("id", "must be a non-negative integer representable by the server");
+		if (!data.contains("name") || !data["name"].is_string() ||
+			data["name"].get_ref<const std::string&>().size() > dev::CodePerf::MAX_NAME_BYTES ||
+			!IsValidUtf8(data["name"].get_ref<const std::string&>()))
+			return invalid("name", "must be a UTF-8 string of at most 1024 bytes");
+		if (!data.contains("addrStart") || !IsAddress(data["addrStart"]))
+			return invalid("addrStart", "must be an integer in the range 0..65535");
+		if (!data.contains("addrEnd") || !IsAddress(data["addrEnd"]))
+			return invalid("addrEnd", "must be an integer in the range 0..65535");
+		if (data["addrStart"].get<uint64_t>() >= data["addrEnd"].get<uint64_t>())
+			return invalid("addrEnd", "must be greater than addrStart");
+		if (!data.contains("active") || !data["active"].is_boolean())
+			return invalid("active", "must be boolean");
+		return std::nullopt;
+	}
+
+	auto ValidateCodePerfId(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+		for (const auto& [name, fieldValue] : data.items()) {
+			if (name != "id") return invalid(name, "is not supported");
+		}
+		uint64_t id = 0;
+		if (!data.contains("id") || !ReadUnsigned(data["id"], id) ||
+			id > static_cast<uint64_t>(std::numeric_limits<dev::Id>::max()))
+			return invalid("id", "must be a non-negative integer representable by the server");
+		return std::nullopt;
+	}
+
 	auto ValidateBreakpointAddress(const nlohmann::json& data, const int command,
 		const bool allowStatus = false) -> std::optional<dev::server::RequestError>
 	{
@@ -359,6 +413,23 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 			{{"command", command}, {"field", data.items().begin().key()}}};
 	}
 
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_ADD)) {
+		if (auto error = ValidateCodePerfInput(data, command)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT)) {
+		if (auto error = ValidateCodePerfInput(data, command, true)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_DEL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_GET) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EXISTS)) {
+		if (auto error = ValidateCodePerfId(data, command)) return *error;
+	}
+	if ((command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_DEL_ALL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL)) && !data.empty()) {
+		return RequestError{"invalid_request", "command " + std::to_string(command) + " does not accept data",
+			{{"command", command}, {"field", data.items().begin().key()}}};
+	}
+
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_ADD)) {
 		if (auto error = ValidateStructuredBreakpoint(data, command)) return *error;
 	}
@@ -413,7 +484,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT); ++command) {
 		commands.push_back(command);
 	}
 
@@ -429,6 +500,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"breakpointSchema", 1},
 			{"watchpointSchema", 1},
 			{"memoryEditSchema", 1},
+			{"codePerfSchema", 1},
 			{"stopRecordSchema", 1},
 			{"hardwareStatsSchema", 1},
 			{"hardwareStatsWhileRunning", true},
@@ -441,6 +513,9 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			}},
 			{"watchpointServerAllocatedIds", true},
 			{"watchpointEdit", true},
+			{"codePerfServerAllocatedIds", true},
+			{"codePerfEdit", true},
+			{"codePerfMutationsWhileRunning", true},
 			{"watchpointMutationsWhileRunning", true},
 			{"watchpointLimits", {
 				{"maxRangeLength", dev::Memory::MEMORY_GLOBAL_LEN},
@@ -449,6 +524,12 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"memoryEditLimits", {
 				{"globalAddressExclusive", dev::Memory::MEMORY_GLOBAL_LEN},
 				{"maxCommentBytes", 1024}
+			}},
+			{"codePerfLimits", {
+				{"addressExclusive", 65536},
+				{"maxNameBytes", dev::CodePerf::MAX_NAME_BYTES},
+				{"maxRecords", dev::CodePerf::MAX_RECORDS},
+				{"maxTestCount", dev::CodePerf::MAX_TEST_COUNT}
 			}}
 		}}
 	};

@@ -1,5 +1,6 @@
 #include "server_mode.h"
 
+#include "core/debug_data.h"
 #include "core/memory_edit.h"
 
 #include <iostream>
@@ -181,6 +182,25 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 				{"command", static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_EDIT)},
 				{"field", "id"},
 				{"id", error.GetId()}
+			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
+		} catch (const dev::CodePerfNotFound& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {
+				{"command", static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT)},
+				{"field", "id"},
+				{"id", error.GetId()}
+			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
+		} catch (const dev::CodePerfAddError& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {
+				{"command", static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_ADD)},
+				{"field", "collection"},
+				{"reason", error.GetFailure() == dev::CodePerfAddFailure::CAPACITY ?
+					"capacity" : "id_exhausted"}
 			};
 			server.Send(dev::ipc::Encode(errorResponse));
 			continue;

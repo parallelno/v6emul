@@ -1,59 +1,82 @@
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
-#include <format>
 
 #include "utils/types.h"
-#include "utils/str_utils.h"
 #include "utils/json_utils.h"
 
 namespace dev
 {
 	struct CodePerf
 	{
-		static constexpr int TESTS_MAX = 20000;
-		std::string label;
+		static constexpr int64_t MAX_TEST_COUNT = 20000;
+		static constexpr size_t MAX_NAME_BYTES = 1024;
+		static constexpr size_t MAX_RECORDS = 256;
+
+		std::string name;
 		Addr addrStart = 0;
 		Addr addrEnd = 0x100;
-		double averageCcDiff = 0.0f; // average cc (Cpu CLock) difference between it entered the addrStart and exited addrEnd
-		int64_t tests = 0; // how many testes executed
-		int64_t cc = 0; // the current perf test cc
+		double averageClockCycles = 0.0;
+		int64_t testCount = 0;
+		std::optional<uint64_t> sampleStartClock;
 		bool active = true;
 
-		auto AddrToStr() const -> std::string {
-			return std::format("0x{:06x}-0x{:06x}: {}, average cc: {}, tests: {}",
-				addrStart, addrEnd,
-				active ? "active" : "not active",
-				static_cast<int>(std::round(averageCcDiff)),
-				tests);
+		void CancelSample()
+		{
+			sampleStartClock.reset();
 		}
 
-		void Erase()
+		void ResetStatistics()
 		{
-			label.clear();
-			addrStart = 0;
-			addrEnd = 0x100;
-			averageCcDiff = 0;
-			tests = 0;
-			cc = 0;
-			active = true;
+			averageClockCycles = 0.0;
+			testCount = 0;
+			CancelSample();
+		}
+
+		void Edit(const CodePerf& _codePerf)
+		{
+			const bool endpointsChanged =
+				addrStart != _codePerf.addrStart || addrEnd != _codePerf.addrEnd;
+
+			name = _codePerf.name;
+			if (endpointsChanged)
+			{
+				addrStart = _codePerf.addrStart;
+				addrEnd = _codePerf.addrEnd;
+				ResetStatistics();
+			}
+			else if (active != _codePerf.active)
+			{
+				CancelSample();
+			}
+			active = _codePerf.active;
 		}
 
 		void CheckPerf(const Addr _addr, const uint64_t _cc)
 		{
-			if (!active || (addrStart != _addr && cc == 0)) return;
+			if (!active || testCount >= MAX_TEST_COUNT) return;
 
-			if (addrStart == _addr){
-				cc = _cc;
-			}
-			else
-			if (addrEnd == _addr)
+			if (addrStart == _addr)
 			{
-					tests += tests >= TESTS_MAX ? 0 : 1;
-					auto weight = 1.0 / tests;
-					int64_t ccDiff = _cc - cc;
-					averageCcDiff += (ccDiff - averageCcDiff) * weight;
-					cc = 0;
+				sampleStartClock = _cc;
+				return;
+			}
+
+			if (addrEnd == _addr && sampleStartClock)
+			{
+				if (_cc < *sampleStartClock)
+				{
+					CancelSample();
+					return;
+				}
+
+				testCount++;
+				const auto duration = static_cast<double>(_cc - *sampleStartClock);
+				const auto weight = 1.0 / static_cast<double>(testCount);
+				averageClockCycles += (duration - averageClockCycles) * weight;
+				CancelSample();
 			}
 		}
 
@@ -61,19 +84,22 @@ namespace dev
 
 		CodePerf(const nlohmann::json& _json)
 			:
-			label(_json["label"].get<std::string>()),
-			addrStart(dev::StrHexToInt(_json["addrStart"].get<std::string>())),
-			addrEnd(dev::StrHexToInt(_json["addrEnd"].get<std::string>())),
+			name(_json["name"].get<std::string>()),
+			addrStart(_json["addrStart"].get<Addr>()),
+			addrEnd(_json["addrEnd"].get<Addr>()),
 			active(_json["active"].get<bool>())
 		{}
 
-		auto ToJson() const -> nlohmann::json
+		auto ToSnapshotJson(const Id _id) const -> nlohmann::json
 		{
 			return {
-				{"label", label},
-				{"addrStart", std::format("0x{:04X}", addrStart)},
-				{"addrEnd", std::format("0x{:04X}", addrEnd)},
-				{"active", active}
+				{"id", _id},
+				{"name", name},
+				{"addrStart", addrStart},
+				{"addrEnd", addrEnd},
+				{"active", active},
+				{"averageClockCycles", averageClockCycles},
+				{"testCount", testCount}
 			};
 		}
 	};

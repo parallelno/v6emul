@@ -439,6 +439,16 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD), 98);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL), 99);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE), 100);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL), 101);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT), 102);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::INTERNAL_BEGIN_SESSION), 1001);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::INTERNAL_REAPPLY_MEMORY_EDITS), 1002);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES), 1003);
+	ASSERT_TRUE(static_cast<int>(dev::Hardware::Req::INTERNAL_BEGIN_SESSION) >
+		static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT));
+	ASSERT_TRUE(static_cast<int>(dev::Hardware::Req::INTERNAL_BEGIN_SESSION) != dev::ipc::CMD_GET_SERVER_INFO);
+	ASSERT_TRUE(static_cast<int>(dev::Hardware::Req::INTERNAL_REAPPLY_MEMORY_EDITS) != dev::ipc::CMD_GET_FRAME_RAW);
+	ASSERT_TRUE(static_cast<int>(dev::Hardware::Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES) != dev::ipc::CMD_GET_FRAME);
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	ASSERT_TRUE(!hw->Request(static_cast<dev::Hardware::Req>(0)));
@@ -599,6 +609,67 @@ static void test_request_validation()
 	assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL)},
 		{dev::ipc::FIELD_DATA, {{"extra", true}}}});
 
+	const auto codePerfAdd = static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_ADD);
+	const auto codePerfEdit = static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT);
+	const nlohmann::json codePerf = {
+		{"name", "render"}, {"addrStart", 0x1000}, {"addrEnd", 0x1010}, {"active", true}
+	};
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, codePerfAdd}, {dev::ipc::FIELD_DATA, codePerf}
+	})));
+	auto codePerfWithId = codePerf;
+	codePerfWithId["id"] = 7;
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, codePerfEdit}, {dev::ipc::FIELD_DATA, codePerfWithId}
+	})));
+	auto assertInvalidCodePerf = [&codePerf, &assertInvalid, codePerfAdd](const nlohmann::json& patch) {
+		auto invalidData = codePerf;
+		invalidData.update(patch);
+		assertInvalid({{dev::ipc::FIELD_CMD, codePerfAdd}, {dev::ipc::FIELD_DATA, invalidData}});
+	};
+	assertInvalidCodePerf({{"id", 0}});
+	assertInvalidCodePerf({{"averageClockCycles", 1.0}});
+	assertInvalidCodePerf({{"testCount", 1}});
+	assertInvalidCodePerf({{"name", std::string(dev::CodePerf::MAX_NAME_BYTES + 1, 'x')}});
+	assertInvalidCodePerf({{"name", std::string("\xC3\x28", 2)}});
+	assertInvalidCodePerf({{"addrStart", -1}});
+	assertInvalidCodePerf({{"addrEnd", 65536}});
+	assertInvalidCodePerf({{"addrEnd", 0x1000}});
+	assertInvalidCodePerf({{"addrEnd", 0x0FFF}});
+	assertInvalidCodePerf({{"active", 1}});
+	for (const auto command : {
+		dev::Hardware::Req::DEBUG_CODE_PERF_DEL,
+		dev::Hardware::Req::DEBUG_CODE_PERF_GET,
+		dev::Hardware::Req::DEBUG_CODE_PERF_EXISTS}) {
+		ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, static_cast<int>(command)}, {dev::ipc::FIELD_DATA, {{"id", 0}}}
+		})));
+		assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, {{"id", -1}}}});
+		assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, {{"id", 1.5}}}});
+		assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, {{"id", 0}, {"extra", true}}}});
+	}
+	for (const auto command : {
+		dev::Hardware::Req::DEBUG_CODE_PERF_DEL_ALL,
+		dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL}) {
+		ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, nlohmann::json::object()}
+		})));
+		assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, {{"extra", true}}}});
+	}
+	auto equalEndpoints = codePerf;
+	equalEndpoints["addrEnd"] = equalEndpoints["addrStart"];
+	const auto equalResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, codePerfAdd}, {dev::ipc::FIELD_DATA, equalEndpoints}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(equalResult));
+	ASSERT_EQ(std::get<dev::server::RequestError>(equalResult).details["field"].get<std::string>(),
+		std::string("addrEnd"));
+
 	const auto watchpointAdd = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD);
 	const nlohmann::json watchpoint = {
 		{"globalAddr", 65536}, {"len", 4}, {"value", 32},
@@ -711,6 +782,8 @@ static void test_server_info()
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DISMOUNT_FDD)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_GET_ALL)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
@@ -721,6 +794,17 @@ static void test_server_info()
 	ASSERT_EQ(info["capabilities"]["memoryEditLimits"]["globalAddressExclusive"].get<uint32_t>(),
 		dev::Memory::MEMORY_GLOBAL_LEN);
 	ASSERT_EQ(info["capabilities"]["memoryEditLimits"]["maxCommentBytes"].get<int>(), 1024);
+	ASSERT_EQ(info["capabilities"]["codePerfSchema"].get<int>(), 1);
+	ASSERT_TRUE(info["capabilities"]["codePerfServerAllocatedIds"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["codePerfEdit"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["codePerfMutationsWhileRunning"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["codePerfLimits"]["addressExclusive"].get<int>(), 65536);
+	ASSERT_EQ(info["capabilities"]["codePerfLimits"]["maxNameBytes"].get<size_t>(),
+		dev::CodePerf::MAX_NAME_BYTES);
+	ASSERT_EQ(info["capabilities"]["codePerfLimits"]["maxRecords"].get<size_t>(),
+		dev::CodePerf::MAX_RECORDS);
+	ASSERT_EQ(info["capabilities"]["codePerfLimits"]["maxTestCount"].get<int64_t>(),
+		dev::CodePerf::MAX_TEST_COUNT);
 	ASSERT_EQ(info["capabilities"]["stopRecordSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["hardwareStatsSchema"].get<int>(), 1);
 	ASSERT_TRUE(info["capabilities"]["hardwareStatsWhileRunning"].get<bool>());
@@ -959,37 +1043,120 @@ static void test_structured_watchpoints()
 	ASSERT_EQ(updates(), beforeClear + 1);
 }
 
-static void test_code_perfs_use_generated_ids()
+static void test_structured_code_perfs()
 {
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
-	auto add = [&hw](const std::string& label) {
+	auto add = [&hw](const std::string& name, const uint16_t addrEnd = 0x1010) {
 		return hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_ADD, {
-			{"label", label}, {"addrStart", "0x1000"},
-			{"addrEnd", "0x1010"}, {"active", true}
+			{"name", name}, {"addrStart", 0x1000}, {"addrEnd", addrEnd}, {"active", true}
 		});
 	};
 
-	auto first = add("first");
-	auto second = add("second");
+	auto empty = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL);
+	ASSERT_TRUE(empty.HasValue());
+	ASSERT_TRUE(empty->is_array());
+	ASSERT_TRUE(empty->empty());
+
+	auto first = add("first", 0x1010);
+	auto second = add("second", 0x1020);
 	ASSERT_TRUE(first.HasValue());
 	ASSERT_TRUE(second.HasValue());
 	ASSERT_EQ((*first)["id"].get<dev::Id>(), 0);
 	ASSERT_EQ((*second)["id"].get<dev::Id>(), 1);
+	ASSERT_EQ((*first)["name"].get<std::string>(), std::string("first"));
+	ASSERT_EQ((*first)["addrStart"].get<uint16_t>(), static_cast<uint16_t>(0x1000));
+	ASSERT_EQ((*first)["addrEnd"].get<uint16_t>(), static_cast<uint16_t>(0x1010));
+	ASSERT_TRUE((*first)["addrStart"].is_number_integer());
+	ASSERT_EQ((*first)["testCount"].get<int64_t>(), int64_t(0));
+	ASSERT_EQ((*first)["averageClockCycles"].get<double>(), 0.0);
 
 	auto firstRecord = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET, {{"id", 0}});
 	auto secondRecord = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET, {{"id", 1}});
-	ASSERT_EQ((*firstRecord)["data"]["label"].get<std::string>(), std::string("first"));
-	ASSERT_EQ((*secondRecord)["data"]["label"].get<std::string>(), std::string("second"));
+	ASSERT_EQ((*firstRecord)["name"].get<std::string>(), std::string("first"));
+	ASSERT_EQ((*secondRecord)["name"].get<std::string>(), std::string("second"));
+	auto all = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL);
+	ASSERT_EQ(all->size(), static_cast<size_t>(2));
+	ASSERT_EQ((*all)[0]["id"].get<dev::Id>(), 0);
+	ASSERT_EQ((*all)[1]["id"].get<dev::Id>(), 1);
+
+	auto& debugData = debugger->GetDebugData();
+	debugData.CheckCodePerfs(0x1000, 0);
+	debugData.CheckCodePerfs(0x1010, 10);
+	firstRecord = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET, {{"id", 0}});
+	ASSERT_EQ((*firstRecord)["testCount"].get<int64_t>(), int64_t(1));
+	ASSERT_EQ((*firstRecord)["averageClockCycles"].get<double>(), 10.0);
+
+	auto edited = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT, {
+		{"id", 0}, {"name", "renamed"}, {"addrStart", 0x1000},
+		{"addrEnd", 0x1010}, {"active", true}
+	});
+	ASSERT_EQ((*edited)["id"].get<dev::Id>(), 0);
+	ASSERT_EQ((*edited)["name"].get<std::string>(), std::string("renamed"));
+	ASSERT_EQ((*edited)["testCount"].get<int64_t>(), int64_t(1));
+
+	edited = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT, {
+		{"id", 0}, {"name", "moved"}, {"addrStart", 0x1100},
+		{"addrEnd", 0x1110}, {"active", true}
+	});
+	ASSERT_EQ((*edited)["testCount"].get<int64_t>(), int64_t(0));
+	ASSERT_EQ((*edited)["averageClockCycles"].get<double>(), 0.0);
+
+	debugData.CheckCodePerfs(0x1100, 20);
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESET));
+	debugData.CheckCodePerfs(0x1110, 5);
+	firstRecord = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET, {{"id", 0}});
+	ASSERT_EQ((*firstRecord)["testCount"].get<int64_t>(), int64_t(0));
 
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_DEL, {{"id", 0}}));
 	auto firstExists = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_EXISTS, {{"id", 0}});
 	auto secondExists = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_EXISTS, {{"id", 1}});
-	ASSERT_TRUE(!(*firstExists)["data"].get<bool>());
-	ASSERT_TRUE((*secondExists)["data"].get<bool>());
+	ASSERT_TRUE(!(*firstExists)["exists"].get<bool>());
+	ASSERT_TRUE((*secondExists)["exists"].get<bool>());
+	auto missing = hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_GET, {{"id", 0}});
+	ASSERT_TRUE(missing.HasValue());
+	ASSERT_TRUE(missing->is_null());
 
 	auto third = add("third");
 	ASSERT_EQ((*third)["id"].get<dev::Id>(), 2);
+
+	bool missingEditRejected = false;
+	try {
+		hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT, {
+			{"id", 999}, {"name", "missing"}, {"addrStart", 0x1000},
+			{"addrEnd", 0x1010}, {"active", true}
+		});
+	} catch (const dev::CodePerfNotFound& error) {
+		missingEditRejected = error.GetId() == 999;
+	}
+	ASSERT_TRUE(missingEditRejected);
+
+	dev::CodePerf saturated{{
+		{"name", "saturated"}, {"addrStart", 0}, {"addrEnd", 1}, {"active", true}
+	}};
+	for (int64_t sample = 0; sample < dev::CodePerf::MAX_TEST_COUNT; sample++) {
+		saturated.CheckPerf(0, static_cast<uint64_t>(sample * 10));
+		saturated.CheckPerf(1, static_cast<uint64_t>(sample * 10 + 4));
+	}
+	ASSERT_EQ(saturated.testCount, dev::CodePerf::MAX_TEST_COUNT);
+	ASSERT_EQ(saturated.averageClockCycles, 4.0);
+	saturated.CheckPerf(0, 999999);
+	saturated.CheckPerf(1, 1000999);
+	ASSERT_EQ(saturated.testCount, dev::CodePerf::MAX_TEST_COUNT);
+	ASSERT_EQ(saturated.averageClockCycles, 4.0);
+	ASSERT_TRUE(!saturated.sampleStartClock.has_value());
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_DEL_ALL));
+	for (size_t index = 0; index < dev::CodePerf::MAX_RECORDS; index++) {
+		ASSERT_TRUE(add("capacity"));
+	}
+	bool capacityRejected = false;
+	try {
+		add("overflow");
+	} catch (const dev::CodePerfAddError& error) {
+		capacityRejected = error.GetFailure() == dev::CodePerfAddFailure::CAPACITY;
+	}
+	ASSERT_TRUE(capacityRejected);
 }
 
 static void test_structured_memory_edits()
@@ -1599,7 +1766,7 @@ int main()
 	test_stop_record_lifecycle();
 	test_structured_breakpoints();
 	test_structured_watchpoints();
-	test_code_perfs_use_generated_ids();
+	test_structured_code_perfs();
 	test_structured_memory_edits();
 	test_watchpoint_matching();
 	test_watchpoints_break_execution();

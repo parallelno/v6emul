@@ -684,6 +684,10 @@ void dev::Hardware::Reset()
 	m_cpu.Reset();
 	m_display.Reset();
 	m_audio.Reset();
+	if (DebugReqHandling) {
+		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
+			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+	}
 }
 
 void dev::Hardware::Restart()
@@ -694,6 +698,10 @@ void dev::Hardware::Restart()
 	m_display.Reset();
 	m_audio.Reset();
 	m_memory.Restart();
+	if (DebugReqHandling) {
+		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
+			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+	}
 }
 
 void dev::Hardware::Stop(bool _record)

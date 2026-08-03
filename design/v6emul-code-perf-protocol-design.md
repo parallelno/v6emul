@@ -1,6 +1,6 @@
 # v6emul Code Performance Protocol Design
 
-**Status:** Proposed
+**Status:** Implemented
 **Date:** 2026-08-02
 **Consumer:** v6vscode and other IPC clients
 

@@ -1,4 +1,5 @@
 #include <string>
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <cstring>
@@ -459,6 +460,9 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 	// Code Perfs
 	//
 	/////////////////
+	case Hardware::Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES:
+		m_debugData.CancelCodePerfSamples();
+		break;
 
 	case Hardware::Req::DEBUG_CODE_PERF_DEL_ALL:
 		m_debugData.DelAllCodePerfs();
@@ -469,21 +473,42 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_CODE_PERF_ADD:
-		out = { {"id", m_debugData.SetCodePerf(_reqDataJ)} };
+	{
+		const auto id = m_debugData.AddCodePerf(CodePerf{_reqDataJ});
+		out = m_debugData.GetCodePerf(id)->ToSnapshotJson(id);
 		break;
+	}
+
+	case Hardware::Req::DEBUG_CODE_PERF_EDIT:
+	{
+		const auto id = _reqDataJ["id"].get<Id>();
+		out = m_debugData.EditCodePerf(id, CodePerf{_reqDataJ}).ToSnapshotJson(id);
+		break;
+	}
 
 	case Hardware::Req::DEBUG_CODE_PERF_GET:
 	{
-		auto codePerf = m_debugData.GetCodePerf(_reqDataJ["id"]);
-		if (codePerf)
-		{
-			out = { {"data", codePerf->ToJson()} };
-		}
+		const auto id = _reqDataJ["id"].get<Id>();
+		auto codePerf = m_debugData.GetCodePerf(id);
+		out = codePerf ? codePerf->ToSnapshotJson(id) : nlohmann::json(nullptr);
+		break;
+	}
+
+	case Hardware::Req::DEBUG_CODE_PERF_GET_ALL:
+	{
+		std::vector<Id> ids;
+		ids.reserve(m_debugData.GetCodePerfs().size());
+		for (const auto& [id, codePerf] : m_debugData.GetCodePerfs()) ids.push_back(id);
+		std::sort(ids.begin(), ids.end());
+
+		out = nlohmann::json::array();
+		for (const auto id : ids)
+			out.push_back(m_debugData.GetCodePerfs().at(id).ToSnapshotJson(id));
 		break;
 	}
 
 	case Hardware::Req::DEBUG_CODE_PERF_EXISTS:
-		out = { {"data", m_debugData.GetCodePerf(_reqDataJ["id"]) != nullptr } };
+		out = { {"exists", m_debugData.GetCodePerf(_reqDataJ["id"]) != nullptr } };
 		break;
 
 	//////////////////

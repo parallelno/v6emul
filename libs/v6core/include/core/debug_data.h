@@ -4,6 +4,7 @@
 #include <vector>
 #include <limits.h>
 #include <format>
+#include <stdexcept>
 
 #include "utils/types.h"
 #include "utils/str_utils.h"
@@ -18,6 +19,32 @@
 
 namespace dev
 {
+	class CodePerfNotFound : public std::runtime_error
+	{
+	public:
+		explicit CodePerfNotFound(const Id _id)
+			: std::runtime_error("code performance record id not found"), m_id(_id) {}
+
+		auto GetId() const -> Id { return m_id; }
+
+	private:
+		Id m_id;
+	};
+
+	enum class CodePerfAddFailure { CAPACITY, ID_EXHAUSTED };
+
+	class CodePerfAddError : public std::runtime_error
+	{
+	public:
+		explicit CodePerfAddError(const CodePerfAddFailure _failure)
+			: std::runtime_error("code performance record cannot be added"), m_failure(_failure) {}
+
+		auto GetFailure() const -> CodePerfAddFailure { return m_failure; }
+
+	private:
+		CodePerfAddFailure m_failure;
+	};
+
 	class DebugData
 	{
 	public:
@@ -70,9 +97,12 @@ namespace dev
 		void GetFilteredMemoryEdits(FilteredElements& _out, const std::string& _filter = "") const;
 
 		auto GetCodePerf(const Id _id) const -> const CodePerf*;
-		auto SetCodePerf(const CodePerf& _codePerf) -> Id;
+		auto GetCodePerfs() const -> const CodePerfs& { return m_codePerfs; }
+		auto AddCodePerf(const CodePerf& _codePerf) -> Id;
+		auto EditCodePerf(const Id _id, const CodePerf& _codePerf) -> const CodePerf&;
 		void DelCodePerf(const Id _id);
 		void DelAllCodePerfs();
+		void CancelCodePerfSamples();
 		auto CheckCodePerfs(const Addr _addrStart, const uint64_t _cc) -> bool;
 
 		auto GetCommentsUpdates() const -> UpdateId { return m_commentsUpdates; };
@@ -127,6 +157,7 @@ namespace dev
 		UpdateId m_editsUpdates = 0;
 		UpdateId m_codePerfsUpdates = 0;
 		Id m_nextCodePerfId = 0;
+		bool m_codePerfIdsExhausted = false;
 
 		using MemStats = std::array<uint64_t, Memory::MEMORY_GLOBAL_LEN>;
 		MemStats m_memRuns;

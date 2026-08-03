@@ -538,13 +538,36 @@ Records survive reset, restart, ROM loading, and TCP reconnect. They are cleared
 
 ### Debug: Code Performance
 
-| cmd | Name | Data |
-|-----|------|------|
-| 79 | `DEBUG_CODE_PERF_ADD` | perf region definition |
-| 80 | `DEBUG_CODE_PERF_DEL_ALL` | — |
-| 81 | `DEBUG_CODE_PERF_DEL` | perf region id |
-| 82 | `DEBUG_CODE_PERF_GET` | perf region id |
-| 83 | `DEBUG_CODE_PERF_EXISTS` | perf region id |
+Code-performance schema 1 separates client-writable input from server-owned identity and statistics:
+
+```json
+{
+  "name": "render",
+  "addrStart": 4096,
+  "addrEnd": 4352,
+  "active": true
+}
+```
+
+Snapshots add `id`, `averageClockCycles`, and `testCount`. All addresses and statistics are numeric. IDs are allocated monotonically by the server and are not reused while the current debugger collection exists.
+
+| cmd | Name | Data | Response |
+|-----|------|------|----------|
+| 79 | `DEBUG_CODE_PERF_ADD` | complete input object | created snapshot |
+| 80 | `DEBUG_CODE_PERF_DEL_ALL` | — | — |
+| 81 | `DEBUG_CODE_PERF_DEL` | `{"id": integer}` | — |
+| 82 | `DEBUG_CODE_PERF_GET` | `{"id": integer}` | snapshot or `null` |
+| 83 | `DEBUG_CODE_PERF_EXISTS` | `{"id": integer}` | `{"exists": Boolean}` |
+| 101 | `DEBUG_CODE_PERF_GET_ALL` | — | snapshot array ordered by ID |
+| 102 | `DEBUG_CODE_PERF_EDIT` | input object plus `id` | updated snapshot |
+
+ADD is create-only: duplicate names, addresses, and endpoint pairs create distinct records. EDIT is a complete replacement of writable fields. Changing an endpoint resets statistics; changing only the name preserves statistics and an in-progress sample. Any activity change preserves statistics but cancels an in-progress sample. DEL and DEL_ALL are successful no-ops for missing records.
+
+`name` must be valid UTF-8 and fit `codePerfLimits.maxNameBytes`. Addresses must be integers in `0..65535` with `addrStart < addrEnd`; `active` must be Boolean. Unknown fields and client-supplied statistics are rejected. GET, EXISTS, and DEL accept only `id`; GET_ALL and DEL_ALL accept no fields. A missing EDIT ID and collection capacity or ID-allocation failures return structured `invalid_request` errors.
+
+A sample begins when execution reaches `addrStart` and completes at the next `addrEnd`. Reaching the start again restarts the sample. Sampling freezes after `codePerfLimits.maxTestCount` completed samples. Reset, restart, and ROM loading preserve records and completed statistics but cancel in-progress samples.
+
+Clients must require `codePerfSchema = 1` and the relevant command IDs from `GET_SERVER_INFO`. `codePerfLimits` advertises address, name, record-count, and sample-count limits. `codePerfServerAllocatedIds`, `codePerfEdit`, and `codePerfMutationsWhileRunning` describe supported behavior.
 
 ### Debug: Lua Scripts
 
