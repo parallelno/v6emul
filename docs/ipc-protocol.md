@@ -408,6 +408,7 @@ The breakpoint protocol uses structured schema 1 exclusively. Adding an existing
   "operand": "A",
   "condition": "ANY",
   "value": 0,
+  "counter": 1,
   "comment": "interrupt entry"
 }
 ```
@@ -421,13 +422,14 @@ The breakpoint protocol uses structured schema 1 exclusively. Adding an existing
 | `operand` | `A`, `F`, `B`, `C`, `D`, `E`, `H`, `L`, `PSW`, `BC`, `DE`, `HL`, `CC`, or `SP` |
 | `condition` | `ANY`, `EQU`, `LESS`, `GREATER`, `LESS_EQU`, `GREATER_EQU`, or `NOT_EQU` |
 | `value` | Unsigned; 8-bit for byte operands, 16-bit for word operands, and 64-bit for `CC` |
+| `counter` | Optional positive unsigned integer; defaults to `1` and is decremented for every matching visit until the breakpoint stops |
 | `comment` | UTF-8 string, at most 1024 encoded bytes |
 
 In `memPages`, bit 0 selects main RAM. Bit `1 + 4 * ramDisk + page` selects one of four pages in RAM disks 0 through 7. `8589934591` (`0x1FFFFFFFF`) selects every mapping. Comparisons are unsigned; `ANY` ignores `value`.
 
 `DEBUG_BREAKPOINT_GET_ALL` always returns an array ordered by ascending `addr`; an empty collection is `[]`. Packed breakpoint words are not accepted or returned. `DEBUG_BREAKPOINT_GET_STATUS` returns `ACTIVE`, `DISABLED`, or `DELETED`, where `DELETED` means no breakpoint exists at the address. Status mutation accepts only `ACTIVE` or `DISABLED`.
 
-`DEBUG_BREAKPOINT_GET_UPDATES` is a 32-bit unsigned wrapping mutation counter. Adds, replacements, effective status changes, auto-deletions, and effective deletes increment it. Rejected requests and no-op mutations do not.
+`DEBUG_BREAKPOINT_GET_ALL` returns the remaining `counter` for each breakpoint. A matching active breakpoint decrements its counter; it stops when the counter reaches zero, and remains stopping on later matching visits until replaced, disabled, or deleted. `DEBUG_BREAKPOINT_GET_UPDATES` is a 32-bit unsigned wrapping mutation counter. Adds, replacements, effective status changes, counter decrements, auto-deletions, and effective deletes increment it. Rejected requests and no-op mutations do not.
 
 Support and limits are advertised by `GET_SERVER_INFO` under `breakpointSchema` and `breakpointLimits`.
 

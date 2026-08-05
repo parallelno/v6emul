@@ -8,6 +8,7 @@
 
 #include "core/hardware.h"
 #include "core/debugger.h"
+#include "core/breakpoints.h"
 #include "core/display.h"
 #include "core/fdd_consts.h"
 #include "ipc/transport.h"
@@ -736,6 +737,7 @@ static void test_request_validation()
 		{dev::ipc::FIELD_CMD, breakpointAdd}, {dev::ipc::FIELD_DATA, breakpoint}
 	});
 	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(breakpointResult));
+	ASSERT_EQ(std::get<dev::server::IpcRequest>(breakpointResult).data["counter"].get<uint64_t>(), uint64_t(1));
 	auto assertInvalidBreakpoint = [&breakpoint, &assertInvalid, breakpointAdd](const nlohmann::json& patch) {
 		auto invalidData = breakpoint;
 		invalidData.update(patch);
@@ -750,6 +752,9 @@ static void test_request_validation()
 	assertInvalidBreakpoint({{"operand", "Flags"}});
 	assertInvalidBreakpoint({{"condition", "="}});
 	assertInvalidBreakpoint({{"value", 256}});
+	assertInvalidBreakpoint({{"counter", 0}});
+	assertInvalidBreakpoint({{"counter", -1}});
+	assertInvalidBreakpoint({{"counter", 1.5}});
 	assertInvalidBreakpoint({{"comment", std::string(1025, 'x')}});
 
 	const auto breakpointSetStatus = static_cast<int>(dev::Hardware::Req::DEBUG_BREAKPOINT_SET_STATUS);
@@ -788,6 +793,8 @@ static void test_server_info()
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["breakpointSchema"].get<int>(), 1);
+	ASSERT_TRUE(info["capabilities"]["breakpointCounter"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["breakpointLimits"]["defaultCounter"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["breakpointLimits"]["mappingPageBits"].get<int>(), 33);
 	ASSERT_EQ(info["capabilities"]["watchpointSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["memoryEditSchema"].get<int>(), 1);
@@ -890,6 +897,22 @@ static void test_structured_breakpoints()
 	memoryState.update.mapping.data = 0;
 	ASSERT_TRUE(!lastRamDiskPage.CheckStatus(cpuState, memoryState));
 
+	dev::Breakpoints countedBreakpoints;
+	cpuState.regs.pc.word = 0x2000;
+	countedBreakpoints.Add(dev::Breakpoint{dev::Breakpoint::Data{
+		0x2000, dev::Breakpoint::MemPages{dev::Breakpoint::MAPPING_PAGES_ALL},
+		dev::Breakpoint::Status::ACTIVE, false, dev::Breakpoint::Operand::A,
+		dev::Condition::ANY, 0, 3
+	}});
+	ASSERT_TRUE(!countedBreakpoints.Check(cpuState, memoryState));
+	ASSERT_EQ(countedBreakpoints.GetAll().at(0x2000).data.structured.counter, uint64_t(2));
+	ASSERT_TRUE(!countedBreakpoints.Check(cpuState, memoryState));
+	ASSERT_EQ(countedBreakpoints.GetAll().at(0x2000).data.structured.counter, uint64_t(1));
+	ASSERT_TRUE(countedBreakpoints.Check(cpuState, memoryState));
+	ASSERT_EQ(countedBreakpoints.GetAll().at(0x2000).data.structured.counter, uint64_t(0));
+	ASSERT_TRUE(countedBreakpoints.Check(cpuState, memoryState));
+	ASSERT_EQ(countedBreakpoints.GetUpdates(), uint32_t(4));
+
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
 	auto getAll = [&hw]() {
@@ -924,6 +947,7 @@ static void test_structured_breakpoints()
 	ASSERT_EQ((*all)[0]["operand"].get<std::string>(), std::string("F"));
 	ASSERT_EQ((*all)[0]["status"].get<std::string>(), std::string("ACTIVE"));
 	ASSERT_EQ((*all)[0]["memPages"].get<uint64_t>(), dev::Breakpoint::MAPPING_PAGES_ALL);
+	ASSERT_EQ((*all)[0]["counter"].get<uint64_t>(), uint64_t(1));
 	ASSERT_TRUE(!(*all)[0].contains("data0"));
 
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_SET_STATUS,

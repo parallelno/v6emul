@@ -285,13 +285,13 @@ namespace
 		return std::nullopt;
 	}
 
-	auto ValidateStructuredBreakpoint(const nlohmann::json& data, const int command)
+	auto ValidateStructuredBreakpoint(nlohmann::json& data, const int command)
 		-> std::optional<dev::server::RequestError>
 	{
 		constexpr size_t MAX_COMMENT_BYTES = 1024;
 		const std::unordered_set<std::string_view> fields = {
 			"addr", "memPages", "status", "autoDelete", "operand",
-			"condition", "value", "comment"
+			"condition", "value", "counter", "comment"
 		};
 		auto invalid = [command](const std::string& field, const std::string& requirement) {
 			return dev::server::RequestError{"invalid_request",
@@ -331,6 +331,13 @@ namespace
 		if (byteOperand && value > 0xFF) return invalid("value", "must fit the selected 8-bit operand");
 		if (operand != "CC" && !byteOperand && value > 0xFFFF)
 			return invalid("value", "must fit the selected 16-bit operand");
+		if (data.contains("counter")) {
+			uint64_t counter = 0;
+			if (!ReadUnsigned(data["counter"], counter) || counter == 0)
+				return invalid("counter", "must be a positive unsigned integer");
+		} else {
+			data["counter"] = 1;
+		}
 		if (!data.contains("comment") || !data["comment"].is_string() ||
 			data["comment"].get_ref<const std::string&>().size() > MAX_COMMENT_BYTES ||
 			!IsValidUtf8(data["comment"].get_ref<const std::string&>()))
@@ -509,8 +516,10 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"runningHardwareMutations", false},
 			{"breakpointLimits", {
 				{"mappingPageBits", 33},
-				{"maxCommentBytes", 1024}
+				{"maxCommentBytes", 1024},
+				{"defaultCounter", 1}
 			}},
+			{"breakpointCounter", true},
 			{"watchpointServerAllocatedIds", true},
 			{"watchpointEdit", true},
 			{"codePerfServerAllocatedIds", true},

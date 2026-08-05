@@ -261,7 +261,8 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 			_reqDataJ["autoDelete"],
 			Breakpoint::GetOperand(_reqDataJ["operand"]),
 			ParseConditionName(_reqDataJ["condition"]),
-			_reqDataJ["value"] };
+			_reqDataJ["value"],
+			_reqDataJ.value("counter", uint64_t{1}) };
 		m_debugData.GetBreakpoints().Add({ std::move(bpData), _reqDataJ["comment"] });
 		break;
 	}

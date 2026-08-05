@@ -71,6 +71,7 @@ namespace dev
 		struct DataStruct {
 			MemPages memPages;
 			uint64_t value;
+			uint64_t counter;
 			Addr addr;
 			Operand operand;
 			Condition cond;
@@ -84,9 +85,10 @@ namespace dev
 				const bool _autoDel = false,
 				const Operand _operand = Operand::A,
 				const Condition _cond = Condition::ANY,
-				const uint64_t _value = 0
+				const uint64_t _value = 0,
+				const uint64_t _counter = 1
 			) :
-				memPages(_memPages), value(_value), addr(_addr), operand(_operand), cond(_cond), status(_status), autoDel(_autoDel)
+				memPages(_memPages), value(_value), counter(_counter), addr(_addr), operand(_operand), cond(_cond), status(_status), autoDel(_autoDel)
 			{};
 		};
 
@@ -100,9 +102,10 @@ namespace dev
 				const bool _autoDel = false,
 				const Operand _operand = Operand::A,
 				const Condition _cond = Condition::ANY,
-				const uint64_t _value = 0
+				const uint64_t _value = 0,
+				const uint64_t _counter = 1
 			) :
-				structured(_addr, _memPages, _status, _autoDel, _operand, _cond, _value)
+				structured(_addr, _memPages, _status, _autoDel, _operand, _cond, _value, _counter)
 			{};
 			Data(const nlohmann::json& _bpJ) :
 				structured(
@@ -112,7 +115,8 @@ namespace dev
 					_bpJ["autoDel"],
 					GetOperand(_bpJ["operand"].get<std::string>()),
 					dev::GetCondition(_bpJ["cond"].get<std::string>()),
-					dev::StrHexToInt(_bpJ["value"].get<std::string>())
+					dev::StrHexToInt(_bpJ["value"].get<std::string>()),
+					_bpJ.value("counter", uint64_t{1})
 				)
 			{};
 		};
@@ -139,6 +143,7 @@ namespace dev
 				{"operand", GetOperandS()},
 				{"cond", dev::ConditionsS[static_cast<uint8_t>(data.structured.cond)]},
 				{"value", std::format("0x{:02X}", data.structured.value)},
+				{"counter", data.structured.counter},
 				{"comment", comment}
 			};
 		};
@@ -152,6 +157,7 @@ namespace dev
 				{"operand", GetOperandS()},
 				{"condition", dev::ConditionNames[static_cast<uint8_t>(data.structured.cond)]},
 				{"value", data.structured.value},
+				{"counter", data.structured.counter},
 				{"comment", comment}
 			};
 		}

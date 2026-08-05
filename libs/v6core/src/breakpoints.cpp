@@ -71,13 +71,19 @@ bool dev::Breakpoints::Check(const CpuI8080::State& _cpuState, const Memory::Sta
 	auto bpI = m_bps.find(_cpuState.regs.pc.word);
 	if (bpI == m_bps.end()) return false;
 
-	auto status = bpI->second.CheckStatus(_cpuState, _memState);
-	if (bpI->second.data.structured.autoDel)
-	{
+	if (!bpI->second.CheckStatus(_cpuState, _memState)) return false;
+
+	auto& data = bpI->second.data.structured;
+	const bool counterChanged = data.counter > 0;
+	if (counterChanged) data.counter--;
+	const bool shouldBreak = data.counter == 0;
+	if (shouldBreak && data.autoDel) {
 		m_bps.erase(bpI);
 		m_updates++;
+	} else if (counterChanged) {
+		m_updates++;
 	}
-	return status;
+	return shouldBreak;
 }
 
 auto dev::Breakpoints::GetAll()
