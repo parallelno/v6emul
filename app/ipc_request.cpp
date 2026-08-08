@@ -366,11 +366,14 @@ namespace
 	auto ValidateTraceLogWindow(const nlohmann::json& data, const int command)
 		-> std::optional<dev::server::RequestError>
 	{
-		if (data.size() != 3 || !data.contains("filterId") || !data["filterId"].is_string() ||
+		if (data.size() != 3 || !data.contains("filterId") ||
 			!data.contains("start") || !data.contains("lines"))
 			return dev::server::RequestError{"invalid_request", "trace-log window requires filterId, start, and lines", {{"command", command}}};
+		uint64_t filterId = 0;
 		uint64_t start = 0;
 		uint64_t lines = 0;
+		if (!ReadUnsigned(data["filterId"], filterId) || filterId == 0)
+			return dev::server::RequestError{"invalid_request", "trace-log window filterId must be a positive unsigned integer", {{"command", command}, {"field", "filterId"}}};
 		if (!ReadUnsigned(data["start"], start)) return dev::server::RequestError{"invalid_request", "trace-log window start must be a non-negative integer", {{"command", command}, {"field", "start"}}};
 		if (!ReadUnsigned(data["lines"], lines) || lines == 0 || lines > 512)
 			return dev::server::RequestError{"invalid_request", "trace-log window lines must be in the range 1..512", {{"command", command}, {"field", "lines"}}};

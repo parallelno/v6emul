@@ -104,21 +104,21 @@ auto dev::TraceLog::CreateFilter(const std::string& addressPattern,
 		const auto& item = m_log[index % TRACE_LOG_SIZE];
 		if (item.globalAddr == EMPTY_ITEM) break;
 		auto entry = MakeQueryEntry(item, m_debugData);
-		const auto address = std::format("0x{:04X}", entry.address);
+		const auto address = dev::Uint16ToStrC0x(entry.address);
 		if ((addressPattern.empty() || GlobMatches(addressPattern, address)) &&
 			(instructionPattern.empty() || GlobMatches(instructionPattern, entry.instruction))) {
 			m_filteredEntries.push_back(std::move(entry));
 		}
 	}
 	m_activeFilterId = ++m_filterGeneration;
-	return {{"filterId", std::to_string(m_activeFilterId)},
+	return {{"filterId", m_activeFilterId},
 		{"totalMatches", m_filteredEntries.size()}};
 }
 
-auto dev::TraceLog::GetFilterWindow(const std::string& filterId, const size_t start,
+auto dev::TraceLog::GetFilterWindow(const uint64_t filterId, const size_t start,
 	const size_t lines) const -> nlohmann::json
 {
-	if (filterId != std::to_string(m_activeFilterId) || m_activeFilterId == 0)
+	if (filterId != m_activeFilterId || m_activeFilterId == 0)
 		throw TraceLogQueryError("unknown or expired trace-log filterId");
 	if (start > m_filteredEntries.size()) throw TraceLogQueryError("trace-log window start is outside the filtered result");
 	nlohmann::json entries = nlohmann::json::array();

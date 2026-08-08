@@ -169,8 +169,8 @@ Trace-log queries expose the retained execution history and are available only w
 
 | cmd | Name | Data | Response |
 |-----|------|------|----------|
-| 103 | `DEBUG_TRACE_LOG_FILTER` | `{"addressPattern"?: string, "instructionPattern"?: string}` | `{"filterId": string, "totalMatches": number}` |
-| 104 | `DEBUG_TRACE_LOG_WINDOW` | `{"filterId": string, "start": number, "lines": number}` | `{"start": number, "entries": TraceLogEntry[]}` |
+| 103 | `DEBUG_TRACE_LOG_FILTER` | `{"addressPattern"?: string, "instructionPattern"?: string}` | `{"filterId": number, "totalMatches": number}` |
+| 104 | `DEBUG_TRACE_LOG_WINDOW` | `{"filterId": number, "start": number, "lines": number}` | `{"start": number, "entries": TraceLogEntry[]}` |
 
 Patterns are optional, case-insensitive `*` globs against canonical address text (`0x1234`) and undecorated I8080 instruction text. Filtered results are newest-first. Filter IDs are opaque and become invalid when a newer filter is created or emulation executes an instruction. Window `lines` must be in the range 1..512; `start` is zero-based and may equal `totalMatches`.
 

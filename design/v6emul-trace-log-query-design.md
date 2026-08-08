@@ -40,14 +40,14 @@ interface TraceLogFilterRequest {
 }
 
 interface TraceLogFilterResponse {
-  filterId: string;
+  filterId: number;
   totalMatches: number;
 }
 ```
 
 Both patterns use case-insensitive `*` glob matching against canonical text. Omitted patterns match all retained instructions. Results are ordered newest first.
 
-`filterId` identifies an immutable filtered result for the current paused state. It is opaque to clients and ensures that delayed window requests cannot accidentally read results from a newer filter. The ID is invalidated by new filter request, emulation stop event, and step operations. A simple implementation is a monotonically increasing counter that is incremented on each filter invalidation.
+`filterId` identifies an immutable filtered result for the current paused state. It is an opaque positive integer for clients and ensures that delayed window requests cannot accidentally read results from a newer filter. The ID is invalidated by new filter request, emulation stop event, and step operations. A simple implementation is a monotonically increasing counter that is incremented on each filter invalidation.
 
 `totalMatches` is the complete filtered-result size and allows the client to size its virtual scrollbar without retrieving all rows.
 
@@ -55,7 +55,7 @@ Both patterns use case-insensitive `*` glob matching against canonical text. Omi
 
 ```ts
 interface TraceLogWindowRequest {
-  filterId: string;
+  filterId: number;
   start: number;
   lines: number;
 }

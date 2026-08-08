@@ -65,7 +65,7 @@ namespace dev
 		void InvalidateQuery() { InvalidateFilter(); }
 		auto CreateFilter(const std::string& addressPattern,
 			const std::string& instructionPattern) -> nlohmann::json;
-		auto GetFilterWindow(const std::string& filterId, size_t start,
+		auto GetFilterWindow(uint64_t filterId, size_t start,
 			size_t lines) const -> nlohmann::json;
 		static auto GetLogFilename() -> std::string;
 		auto GetPath() const -> const std::string& { return m_saveLogPath; };

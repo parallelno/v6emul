@@ -1804,7 +1804,7 @@ static void test_trace_log_queries()
 
 	const auto filter = *hw->Request(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER,
 		{{"instructionPattern", "*mvi*"}});
-	ASSERT_TRUE(filter["filterId"].is_string());
+	ASSERT_TRUE(filter["filterId"].is_number_unsigned());
 	ASSERT_EQ(filter["totalMatches"].get<size_t>(), size_t(1));
 	const auto window = *hw->Request(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW,
 		{{"filterId", filter["filterId"]}, {"start", 0}, {"lines", 1}});
@@ -1829,7 +1829,12 @@ static void test_trace_log_queries()
 
 	auto invalid = dev::server::ValidateRequest({
 		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW)},
-		{dev::ipc::FIELD_DATA, {{"filterId", "1"}, {"start", 0}, {"lines", 513}}}
+		{dev::ipc::FIELD_DATA, {{"filterId", 1}, {"start", 0}, {"lines", 513}}}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(invalid));
+	invalid = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW)},
+		{dev::ipc::FIELD_DATA, {{"filterId", "1"}, {"start", 0}, {"lines", 1}}}
 	});
 	ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(invalid));
 }
