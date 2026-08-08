@@ -465,6 +465,10 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		m_debugData.CancelCodePerfSamples();
 		break;
 
+	case Hardware::Req::INTERNAL_INVALIDATE_TRACE_LOG_FILTER:
+		m_traceLog.InvalidateQuery();
+		break;
+
 	case Hardware::Req::DEBUG_CODE_PERF_DEL_ALL:
 		m_debugData.DelAllCodePerfs();
 		break;
@@ -553,6 +557,19 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 
 	case Hardware::Req::DEBUG_TRACE_LOG_DISABLE:
 		m_traceLog.SetSaveLog(false);
+		break;
+
+	case Hardware::Req::DEBUG_TRACE_LOG_FILTER:
+		if (m_hardware.IsRunning()) throw TraceLogQueryError("trace-log queries require stopped hardware");
+		out = m_traceLog.CreateFilter(
+			_reqDataJ.value("addressPattern", std::string{}),
+			_reqDataJ.value("instructionPattern", std::string{}));
+		break;
+
+	case Hardware::Req::DEBUG_TRACE_LOG_WINDOW:
+		if (m_hardware.IsRunning()) throw TraceLogQueryError("trace-log queries require stopped hardware");
+		out = m_traceLog.GetFilterWindow(_reqDataJ["filterId"],
+			_reqDataJ["start"], _reqDataJ["lines"]);
 		break;
 
 	default:

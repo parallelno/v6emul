@@ -163,6 +163,19 @@ Positive `cmd` values map directly to the `Hardware::Req` enum. These are dispat
 | 50 | `RUN_HEADLESS` | `{"haltExit": bool, "maxFrames": int, "maxCycles": int}` | `{"cc", "frames", "halted", "pc", "sp", "af", "bc", "de", "hl"}` |
 | 95 | `GET_STOP_RECORD` | — | latest unified stop record |
 
+### Trace Log Query Schema 1
+
+Trace-log queries expose the retained execution history and are available only while emulation is stopped. They are independent from commands 89 and 90, which control file logging.
+
+| cmd | Name | Data | Response |
+|-----|------|------|----------|
+| 103 | `DEBUG_TRACE_LOG_FILTER` | `{"addressPattern"?: string, "instructionPattern"?: string}` | `{"filterId": string, "totalMatches": number}` |
+| 104 | `DEBUG_TRACE_LOG_WINDOW` | `{"filterId": string, "start": number, "lines": number}` | `{"start": number, "entries": TraceLogEntry[]}` |
+
+Patterns are optional, case-insensitive `*` globs against canonical address text (`0x1234`) and undecorated I8080 instruction text. Filtered results are newest-first. Filter IDs are opaque and become invalid when a newer filter is created or emulation executes an instruction. Window `lines` must be in the range 1..512; `start` is zero-based and may equal `totalMatches`.
+
+Each `TraceLogEntry` is `{"address": number, "bytes": number[], "instruction": string}`. `address` is the 16-bit instruction address and `bytes` contains the opcode and any immediate operand bytes.
+
 ### Stop Record Schema 1
 
 `GET_STOP_RECORD` is non-consuming: repeated reads return the same object until a newer stop event replaces it. Before the first stop, it returns sequence `0`, reason `unknown`, and the initial PC/global instruction address. Sequences increase for every recorded stop for the lifetime of the emulator process. Reset, restart, ROM auto-boot, attaching, reconnecting, and loading a ROM do not alter the sequence or latest record because none of those operations stops emulation.

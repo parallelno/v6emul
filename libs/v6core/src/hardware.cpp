@@ -709,6 +709,10 @@ void dev::Hardware::Stop(bool _record)
 	if (m_status == Status::RUN) m_lastRunCycles = GetTotalCycles() - m_runStartCycles;
 	m_status = Status::STOP;
 	m_audio.Pause(true);
+	if (DebugReqHandling) {
+		DebugReqHandling(Req::INTERNAL_INVALIDATE_TRACE_LOG_FILTER, {},
+			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+	}
 	if (_record) RecordStop("pause");
 }
 

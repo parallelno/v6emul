@@ -442,6 +442,8 @@ static void test_hardware_command_ids()
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE), 100);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL), 101);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT), 102);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER), 103);
+	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW), 104);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::INTERNAL_BEGIN_SESSION), 1001);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::INTERNAL_REAPPLY_MEMORY_EDITS), 1002);
 	ASSERT_EQ(static_cast<int>(dev::Hardware::Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES), 1003);
@@ -790,6 +792,8 @@ static void test_server_info()
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_EDIT_RESTORE)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_GET_ALL)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
@@ -821,6 +825,12 @@ static void test_server_info()
 	ASSERT_TRUE(info["capabilities"]["watchpointServerAllocatedIds"].get<bool>());
 	ASSERT_TRUE(info["capabilities"]["watchpointEdit"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["watchpointLimits"]["maxCommentBytes"].get<int>(), 1024);
+	ASSERT_EQ(info["capabilities"]["traceLogSchema"].get<int>(), 1);
+	ASSERT_TRUE(info["capabilities"]["traceLogFilter"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["traceLogWindowQuery"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["traceLogLimits"]["capacity"].get<size_t>(), dev::TraceLog::TRACE_LOG_SIZE);
+	ASSERT_EQ(info["capabilities"]["traceLogLimits"]["maxLines"].get<int>(), 512);
+	ASSERT_EQ(info["capabilities"]["traceLogLimits"]["maxPatternBytes"].get<int>(), 64);
 
 	auto response = dev::ipc::MakeResponse(info);
 	ASSERT_TRUE(dev::ipc::IsRawFrameServerCompatible(response));
@@ -1781,6 +1791,49 @@ static void test_io_port_data_is_256_byte_binary()
 	}
 }
 
+static void test_trace_log_queries()
+{
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
+		{{"addr", 0}, {"data", std::vector<uint8_t>{0x3E, 0x42, 0x00, 0x76}}}));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RESTART));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+
+	const auto filter = *hw->Request(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER,
+		{{"instructionPattern", "*mvi*"}});
+	ASSERT_TRUE(filter["filterId"].is_string());
+	ASSERT_EQ(filter["totalMatches"].get<size_t>(), size_t(1));
+	const auto window = *hw->Request(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW,
+		{{"filterId", filter["filterId"]}, {"start", 0}, {"lines", 1}});
+	ASSERT_EQ(window["start"].get<size_t>(), size_t(0));
+	ASSERT_EQ(window["entries"].size(), size_t(1));
+	ASSERT_EQ(window["entries"][0]["address"].get<uint16_t>(), uint16_t(0));
+	const auto bytes = window["entries"][0]["bytes"].get<std::vector<uint8_t>>();
+	ASSERT_EQ(bytes.size(), size_t(2));
+	ASSERT_EQ(bytes[0], uint8_t(0x3E));
+	ASSERT_EQ(bytes[1], uint8_t(0x42));
+	ASSERT_TRUE(window["entries"][0]["instruction"].get<std::string>().find("mvi") != std::string::npos);
+
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::EXECUTE_INSTR));
+	bool expired = false;
+	try {
+		hw->Request(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW,
+			{{"filterId", filter["filterId"]}, {"start", 0}, {"lines", 1}});
+	} catch (const dev::TraceLogQueryError&) {
+		expired = true;
+	}
+	ASSERT_TRUE(expired);
+
+	auto invalid = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW)},
+		{dev::ipc::FIELD_DATA, {{"filterId", "1"}, {"start", 0}, {"lines", 513}}}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(invalid));
+}
+
 int main()
 {
 	test_hardware_command_ids();
@@ -1809,6 +1862,7 @@ int main()
 	test_fdd_persistence();
 	test_hardware_statistics_and_mutations();
 	test_io_port_data_is_256_byte_binary();
+	test_trace_log_queries();
 
 	std::cout << "IPC Tests: " << tests_passed << "/" << tests_run << " passed";
 	if (tests_failed > 0) {

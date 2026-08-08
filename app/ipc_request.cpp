@@ -8,6 +8,7 @@
 #include "core/breakpoint.h"
 #include "core/code_perf.h"
 #include "core/hardware.h"
+#include "core/trace_log.h"
 #include "ipc/commands.h"
 
 namespace
@@ -38,7 +39,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-			command <= static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT);
+				command <= static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -344,6 +345,37 @@ namespace
 			return invalid("comment", "must be a UTF-8 string of at most 1024 bytes");
 		return std::nullopt;
 	}
+
+	auto ValidateTraceLogFilter(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		constexpr size_t MAX_PATTERN_BYTES = 64;
+		for (const auto& [name, value] : data.items()) {
+			if (name != "addressPattern" && name != "instructionPattern")
+				return dev::server::RequestError{"invalid_request", "command " + std::to_string(command) + " field " + name + " is not supported", {{"command", command}, {"field", name}}};
+		}
+		for (const auto field : {"addressPattern", "instructionPattern"}) {
+			if (data.contains(field) && (!data[field].is_string() ||
+				data[field].get_ref<const std::string&>().size() > MAX_PATTERN_BYTES ||
+				!IsValidUtf8(data[field].get_ref<const std::string&>())))
+				return dev::server::RequestError{"invalid_request", "command " + std::to_string(command) + " field " + field + " must be a UTF-8 string of at most 64 bytes", {{"command", command}, {"field", field}}};
+		}
+		return std::nullopt;
+	}
+
+	auto ValidateTraceLogWindow(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		if (data.size() != 3 || !data.contains("filterId") || !data["filterId"].is_string() ||
+			!data.contains("start") || !data.contains("lines"))
+			return dev::server::RequestError{"invalid_request", "trace-log window requires filterId, start, and lines", {{"command", command}}};
+		uint64_t start = 0;
+		uint64_t lines = 0;
+		if (!ReadUnsigned(data["start"], start)) return dev::server::RequestError{"invalid_request", "trace-log window start must be a non-negative integer", {{"command", command}, {"field", "start"}}};
+		if (!ReadUnsigned(data["lines"], lines) || lines == 0 || lines > 512)
+			return dev::server::RequestError{"invalid_request", "trace-log window lines must be in the range 1..512", {{"command", command}, {"field", "lines"}}};
+		return std::nullopt;
+	}
 }
 
 auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValidation
@@ -426,6 +458,12 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT)) {
 		if (auto error = ValidateCodePerfInput(data, command, true)) return *error;
 	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER)) {
+		if (auto error = ValidateTraceLogFilter(data, command)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW)) {
+		if (auto error = ValidateTraceLogWindow(data, command)) return *error;
+	}
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_DEL) ||
 		command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_GET) ||
 		command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EXISTS)) {
@@ -491,7 +529,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW); ++command) {
 		commands.push_back(command);
 	}
 
@@ -513,6 +551,10 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"hardwareStatsWhileRunning", true},
 			{"paletteEntryMutation", true},
 			{"fddDismount", true},
+			{"traceLogSchema", 1},
+			{"traceLogFilter", true},
+			{"traceLogWindowQuery", true},
+			{"traceLogLimits", {{"capacity", dev::TraceLog::TRACE_LOG_SIZE}, {"maxLines", 512}, {"maxPatternBytes", 64}}},
 			{"runningHardwareMutations", false},
 			{"breakpointLimits", {
 				{"mappingPageBits", 33},

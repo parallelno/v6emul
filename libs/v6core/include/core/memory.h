@@ -123,6 +123,7 @@ namespace dev
 			};
 			uint32_t pack: 24 = 0;
 			uint8_t array[3];
+
 			Instr(uint32_t _pack) : pack(_pack) {}
 			Instr() : pack(0) {}
 		};

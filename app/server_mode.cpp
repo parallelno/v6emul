@@ -2,6 +2,7 @@
 
 #include "core/debug_data.h"
 #include "core/memory_edit.h"
+#include "core/trace_log.h"
 
 #include <iostream>
 #include <string>
@@ -202,6 +203,11 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 				{"reason", error.GetFailure() == dev::CodePerfAddFailure::CAPACITY ?
 					"capacity" : "id_exhausted"}
 			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
+		} catch (const dev::TraceLogQueryError& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {{"command", cmdInt}};
 			server.Send(dev::ipc::Encode(errorResponse));
 			continue;
 		} catch (const std::exception& e) {

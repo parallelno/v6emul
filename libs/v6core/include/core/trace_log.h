@@ -4,6 +4,8 @@
 #include <array>
 #include <atomic>
 #include <fstream>
+#include <stdexcept>
+#include <vector>
 
 #include "utils/types.h"
 #include "core/breakpoint.h"
@@ -13,6 +15,12 @@
 
 namespace dev
 {
+	class TraceLogQueryError : public std::runtime_error
+	{
+	public:
+		explicit TraceLogQueryError(const std::string& message) : std::runtime_error(message) {}
+	};
+
 	class TraceLog
 	{
 		static constexpr const char* TRACE_LOG_NAME = "trace_log";
@@ -25,6 +33,13 @@ namespace dev
 		{
 			int32_t globalAddr = EMPTY_ITEM;
 			Memory::Instr instr; // immediate operand
+		};
+
+		struct QueryEntry
+		{
+			uint16_t address;
+			std::vector<uint8_t> bytes;
+			std::string instruction;
 		};
 
 		using Lines = std::array<DisasmLine, TRACE_LOG_SIZE>;
@@ -47,6 +62,11 @@ namespace dev
 		auto GetDisasmLen() -> const size_t { return m_disasmLinesLen; };
 		void Reset();
 		void SetSaveLog(bool _saveLog, const std::string& _path = {});
+		void InvalidateQuery() { InvalidateFilter(); }
+		auto CreateFilter(const std::string& addressPattern,
+			const std::string& instructionPattern) -> nlohmann::json;
+		auto GetFilterWindow(const std::string& filterId, size_t start,
+			size_t lines) const -> nlohmann::json;
 		static auto GetLogFilename() -> std::string;
 		auto GetPath() const -> const std::string& { return m_saveLogPath; };
 
@@ -58,6 +78,9 @@ namespace dev
 			const Display::State& _displayState);
 		void UpdateLogBuffer(
 			const CpuI8080::State& _cpuState, const Memory::State& _memState);
+		void InvalidateFilter();
+		static auto GlobMatches(const std::string& pattern, const std::string& value) -> bool;
+		static auto MakeQueryEntry(const Item& item, const DebugData& debugData) -> QueryEntry;
 
 		const DebugData& m_debugData;
 
@@ -65,6 +88,9 @@ namespace dev
 		bool m_saveLogInited = false;
 		std::string m_saveLogPath;
 		std::ofstream m_logFile;
+		std::vector<QueryEntry> m_filteredEntries;
+		uint64_t m_filterGeneration = 0;
+		uint64_t m_activeFilterId = 0;
 	};
 
 
