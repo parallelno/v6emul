@@ -780,6 +780,7 @@ static void test_server_info()
 	ASSERT_EQ(info["emulatorVersion"].get<std::string>(), std::string("test-build"));
 	ASSERT_TRUE(hasCommand(dev::ipc::CMD_GET_SERVER_INFO));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STEP_OVER_ADDR)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_MEM)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_STOP_RECORD)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::GET_HARDWARE_STATS)));
