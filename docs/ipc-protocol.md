@@ -610,8 +610,8 @@ Clients must require `codePerfSchema = 1` and the relevant command IDs from `GET
 
 | cmd | Name |
 |-----|------|
-| 89 | `DEBUG_TRACE_LOG_ENABLE` |
-| 90 | `DEBUG_TRACE_LOG_DISABLE` |
+| 89 | `DEBUG_TRACE_LOG_SAVE_ENABLE` |
+| 90 | `DEBUG_TRACE_LOG_SAVE_DISABLE` |
 
 ### Debug: Other
 

@@ -200,7 +200,7 @@ void dev::Hardware::Execution()
 	}
 }
 
-// UI thread. It return when the request fulfilled
+// IPC Interface Thread. It return when the request fulfilled
 auto dev::Hardware::Request(const Req _req, const nlohmann::json& _dataJ)
 -> Result<nlohmann::json>
 {
@@ -900,7 +900,7 @@ auto dev::Hardware::GetRam() const
 	return m_memory.GetRam();
 }
 
-// UI thread. Non-blocking reading.
+// IPC Interface Thread. Non-blocking reading.
 auto dev::Hardware::GetFrame(const bool _vsync)
 -> std::pair<const dev::Display::FrameBuffer*, dev::Display::FrameModeRegion>
 {
