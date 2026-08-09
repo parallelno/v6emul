@@ -7,7 +7,7 @@
 
 Expose Lua-created text and rectangle overlays through IPC. Lua scripts create retained overlay state in the server. `DEBUG_SCRIPT_OVERLAY_GET` returns only overlays changed since the previous request and keys of removed overlays.
 
-The server does not rasterize overlays into the emulated framebuffer. Images, input handling, and general UI widgets are outside this design.
+The server does not rasterize overlays into the emulated framebuffer. It's outside this design.
 
 ## 2. Server Model
 
