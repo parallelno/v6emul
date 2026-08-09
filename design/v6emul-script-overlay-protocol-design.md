@@ -1,161 +1,42 @@
 # v6emul Script Overlay Protocol Design
 
 **Status:** Proposed
-**Date:** 2026-08-08
-**Consumer:** v6vscode and other IPC clients
+**Date:** 2026-08-09
 
 ## 1. Scope
 
-Define a versioned server-to-client protocol for drawing script-produced text and rectangles over the emulated display.
+Expose Lua-created text and rectangle overlays through IPC. Lua scripts create retained overlay state in the server. `DEBUG_SCRIPT_OVERLAY_GET` returns only overlays changed since the previous request and keys of removed overlays.
 
-Lua scripts remain the only writers. A script calls `DrawText`, `DrawRect`, or `DrawRectFilled`; the server stores a retained overlay scene; an IPC client pulls a coherent snapshot and renders it locally. The server does not rasterize script overlays into the emulated framebuffer.
+The server does not rasterize overlays into the emulated framebuffer. Images, input handling, and general UI widgets are outside this design.
 
-This design replaces the unused `Scripts::UIItem`, `UIReqs`, and `vectorScreenCoords` contract. Those types came from the old in-process ImGui frontend and are not a public compatibility surface.
+## 2. Server Model
 
-The design does not provide arbitrary client-to-server drawing, input handling, images, fonts, paths, animation timelines, or general UI widgets.
-
-## 2. Current State and Problems
-
-The current Lua callbacks in `Scripts::RegisterCppFunctions()` write retained items into `m_uiReqs`, and `GetUIItems()` returns a mutex-protected copy. No public hardware request serializes this state, so remote clients cannot consume it.
-
-The old model is not suitable as a wire contract:
-
-- Item identity is only the Lua-provided `id`. Two scripts using the same ID overwrite each other and transfer ownership.
-- `vectorScreenCoords` is a frontend-specific boolean with undocumented wire geometry.
-- The old viewport-coordinate renderer depends on an in-process window position, size, font, and DPI that the server cannot know.
-- Items have no deterministic drawing order.
-- Overlay changes have no revision independent of the script-record revision.
-- Text and item counts are unbounded.
-- Coordinates accept NaN and infinity through `luaL_checknumber`.
-- Scripts cannot explicitly remove one retained item or clear their own output.
-- Lua callbacks mutate live state directly, so there is no explicit invocation-level commit model.
-- Successful recompilation can leave output produced by the previous compiled generation.
-
-## 3. Design Decisions
-
-### 3.1 Retained scene
-
-The overlay is retained state, not an immediate-mode command stream. Calling a draw function creates or replaces an item. An item remains until its owning script replaces or removes it, the script is cleaned up, or a global lifecycle event clears the overlay.
-
-A retained scene avoids sending every Lua call over IPC and lets a client reconnect or recover from a missed poll by requesting one complete snapshot.
-
-### 3.2 Script-scoped identity
-
-An item is identified by the pair `(scriptId, itemId)`.
+An overlay is identified by `(scriptId, itemId)`:
 
 - `scriptId` is the server-owned script record ID.
-- `itemId` is selected by Lua and is local to that script.
-- One script cannot replace or remove another script's items.
-- Reusing an `itemId` in the same script replaces the previous item, including its primitive type.
+- `itemId` is supplied by Lua and is local to that script.
+- Reusing an `itemId` replaces the previous overlay, including its type.
+- One script cannot replace or remove another script's overlays.
 
-The recommended core representation is an owner-partitioned map:
+Suggested storage:
 
 ```cpp
 using OverlayItems = std::unordered_map<Id, OverlayItem>;
 using ScriptOverlays = std::unordered_map<Id, OverlayItems>;
+using RemovedOverlayKeys = std::unordered_set<OverlayKey>;
 ```
 
-This makes per-script capacity checks, cleanup, and transaction staging direct. The IPC snapshot is sorted and must not expose unordered-map iteration order.
+Each retained overlay has an internal `updated` flag. A draw callback builds a validated candidate and compares it with the retained overlay:
 
-### 3.3 Separate overlay revision
+- A new or changed overlay is stored with `updated = true`.
+- An identical call does not modify the overlay or its `updated` flag.
+- An overlay already marked updated remains updated until consumed.
 
-Overlay state has a dedicated wrapping `uint64` revision named `overlayUpdates`. It is independent of the existing script collection `updates` counter.
+Removing an overlay erases it and adds `(scriptId, itemId)` to the pending-removal set. Recreating the same key before consumption removes the pending-removal key and stores the recreated overlay with `updated = true`.
 
-Script status changes are low-frequency management state; overlay text may change every invocation. Reusing one counter would force clients to refetch unrelated script records.
+All mutation and snapshot operations run through the serialized emulation operation path. The overlay maps do not require a mutex.
 
-The revision increments once when one completed operation changes the final observable overlay snapshot. Multiple draw calls in one Lua invocation increment it at most once. Identical replacements do not increment it.
-
-### 3.4 Pull protocol with conditional snapshot
-
-The existing IPC architecture is request/response and clients already pull display frames. Use one conditional snapshot command instead of a two-round-trip `GET_UPDATES` then `GET_ALL` sequence. Two requests can cross two emulation request boundaries and add a frame of avoidable latency.
-
-Reserve the next public command ID:
-
-| ID | Command | Request | Successful data |
-|---:|---|---|---|
-| 110 | `DEBUG_SCRIPT_OVERLAY_GET` | Empty object or `{ "knownUpdates": uint64 }` | `ScriptOverlayResponse` |
-
-Initial or unconditional request:
-
-```json
-{}
-```
-
-Conditional request:
-
-```json
-{ "knownUpdates": 42 }
-```
-
-Unchanged response:
-
-```json
-{
-  "overlayUpdates": 42,
-  "changed": false
-}
-```
-
-Changed or unconditional response:
-
-```json
-{
-  "overlayUpdates": 43,
-  "changed": true,
-  "items": []
-}
-```
-
-`items` is present exactly when `changed` is true. An unconditional request always returns `changed: true` and a complete `items` array, including an empty array.
-
-A client compares revisions for equality only. It must not infer ordering from a wrapping revision. After connection, reconnect, or local state loss, it sends an unconditional request.
-
-### 3.5 Client-side rendering
-
-The server publishes logical primitives. The client controls rasterization, DPI scaling, clipping, antialiasing, and the actual font family. Script overlay output is not part of `GET_FRAME` or `GET_FRAME_RAW`, so clients may hide it without changing emulation output.
-
-A client should request the conditional snapshot at its display refresh cadence or after receiving a new frame. It replaces its entire local overlay scene whenever `changed` is true. It must clear local overlay state on disconnect before a new unconditional snapshot is received.
-
-## 4. Capabilities
-
-Advertise command `110` in `GET_SERVER_INFO.commands` and add:
-
-```ts
-interface ScriptOverlayLimits {
-  maxItemsPerScript: number;
-  maxItemsTotal: number;
-  maxTextBytes: number;
-  maxCoordinateMagnitude: number;
-  maxFontSize: number;
-  maxLineWidth: number;
-}
-
-interface ScriptOverlayCapabilities {
-  scriptOverlaySchema: 1;
-  scriptOverlayRetained: true;
-  scriptOverlayConditionalSnapshot: true;
-  scriptOverlayCoordinateSpaces: ['frame', 'normalized'];
-  scriptOverlayColorFormat: 'RRGGBBAA';
-  scriptOverlayLimits: ScriptOverlayLimits;
-}
-```
-
-Initial server limits:
-
-| Limit | Value |
-|---|---:|
-| `maxItemsPerScript` | 256 |
-| `maxItemsTotal` | 1024 |
-| `maxTextBytes` | 4096 |
-| `maxCoordinateMagnitude` | 1000000 |
-| `maxFontSize` | 512 |
-| `maxLineWidth` | 512 |
-
-Clients must require `scriptOverlaySchema = 1` and command `110` before using the feature. `scriptSchema = 1` alone does not imply overlay support.
-
-## 5. Lua API
-
-The old positional boolean is removed. Optional rendering properties use a Lua table so schema 1 can be extended without adding more positional parameters.
+## 3. Lua API
 
 ```lua
 DrawText(itemId, text, x, y, options)
@@ -165,73 +46,69 @@ RemoveDrawItem(itemId)
 ClearDrawItems()
 ```
 
-`options` is optional. Supported keys are:
+`options` is optional:
 
 ```lua
 {
   color = 0xFFFFFFFF,
   coordinateSpace = "frame",
-  anchor = "topLeft",
   zIndex = 0,
   fontSize = 12,  -- DrawText only
   lineWidth = 1   -- DrawRect only
 }
 ```
 
-Unknown option keys and options that do not apply to the primitive are Lua runtime errors. Strict options avoid silently ignoring misspellings.
+Unknown or inapplicable options are runtime errors.
 
-### 5.1 Common arguments
+### Common fields
 
-- `itemId` is an integer in `0..2147483647` and is scoped to the currently executing script.
-- `x` and `y` are finite numbers within the advertised coordinate bound.
-- `color` is an unsigned integer in `0..4294967295`, encoded as `0xRRGGBBAA`.
-- `zIndex` is a signed 32-bit integer. Lower values are drawn first.
-- `coordinateSpace` is `frame` or `normalized`.
-- `anchor` is `topLeft`, `topRight`, `bottomLeft`, `bottomRight`, or `center` and selects which point of the primitive is placed at `(x, y)`.
+- `itemId`: integer in `0..2147483647`.
+- `x`, `y`: finite numbers within `maxCoordinateMagnitude`.
+- `color`: unsigned `0xRRGGBBAA` in `0..4294967295`.
+- `zIndex`: signed 32-bit integer; lower values are drawn first.
+- `coordinateSpace`: `frame` or `normalized`.
+- `(x, y)`: bottom-left origin of the text or rectangle.
 
-### 5.2 Coordinate spaces
+### Coordinate spaces
 
-`frame` uses logical coordinates of the complete framebuffer returned by `GET_FRAME_RAW`:
+`frame` uses complete framebuffer coordinates:
 
-- Origin is the framebuffer top-left.
-- Positive X points right.
-- Positive Y points down.
+- Origin is the framebuffer bottom-left.
+- Positive X points right; positive Y points up.
 - Coordinates, dimensions, font size, and line width are framebuffer-pixel units.
-- The client applies the same scale and offset used to display the frame.
 
-`normalized` uses the displayed framebuffer rectangle:
+`normalized` uses fractions of the complete framebuffer:
 
-- Origin is the framebuffer top-left.
-- X and width use fractions of framebuffer width.
-- Y, height, font size, and line width use fractions of framebuffer height.
-- Typical visible values are in `0..1`, but finite values outside that interval are allowed and clipped by the client.
+- Origin is the framebuffer bottom-left.
+- X and width are fractions of framebuffer width.
+- Y, height, font size, and line width are fractions of framebuffer height.
 
-Using the framebuffer rectangle rather than the entire client window keeps output portable across VS Code layouts, standalone clients, DPI settings, and window sizes.
+### Primitive rules
 
-### 5.3 Primitive-specific rules
+- `DrawText` requires valid UTF-8 text without NUL bytes. `(x, y)` is the bottom-left of the text layout box. `fontSize` must be positive.
+- `DrawRect` and `DrawRectFilled` require non-negative width and height. `(x, y)` is the rectangle's bottom-left corner.
+- `DrawRect` requires a positive `lineWidth`.
+- `RemoveDrawItem` is an idempotent no-op for an unknown item.
+- `ClearDrawItems` removes all overlays owned by the executing script.
 
-`DrawText` requires valid UTF-8 text of at most `maxTextBytes`. Embedded NUL bytes are rejected. `fontSize` must be finite, positive, and at most `maxFontSize` in `frame` space or `1` in `normalized` space. Text alignment follows `anchor`.
+## 4. IPC Contract
 
-`DrawRect` and `DrawRectFilled` require finite non-negative width and height. `DrawRect` additionally requires a finite positive `lineWidth` within its advertised bound. Rectangle anchoring applies to the complete rectangle.
+Reserve command ID `110`:
 
-`RemoveDrawItem` is an idempotent no-op when the current script does not own that item ID.
+| ID | Command | Request | Response |
+|---:|---|---|---|
+| 110 | `DEBUG_SCRIPT_OVERLAY_GET` | Empty object | `ScriptOverlayResponse` |
 
-`ClearDrawItems` removes every item owned by the current script. It cannot affect another script.
-
-## 6. Wire Model
-
-The response uses strict tagged variants. Common fields appear on every item; irrelevant fields are omitted.
+Wire types:
 
 ```ts
 type CoordinateSpace = 'frame' | 'normalized';
-type OverlayAnchor = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight' | 'center';
 
 interface OverlayCommon {
   scriptId: number;
   itemId: number;
   zIndex: number;
   coordinateSpace: CoordinateSpace;
-  anchor: OverlayAnchor;
   x: number;
   y: number;
   color: number;
@@ -258,176 +135,106 @@ interface RectFilledOverlay extends OverlayCommon {
 
 type ScriptOverlayItem = TextOverlay | RectOverlay | RectFilledOverlay;
 
-type ScriptOverlayResponse =
-  | { overlayUpdates: number; changed: false }
-  | { overlayUpdates: number; changed: true; items: ScriptOverlayItem[] };
+interface ScriptOverlayKey {
+  scriptId: number;
+  itemId: number;
+}
+
+interface ScriptOverlayResponse {
+  overlays: ScriptOverlayItem[];
+  removed: ScriptOverlayKey[];
+}
 ```
 
-Snapshot order is deterministic:
+`Scripts` handles the command atomically:
 
-1. Ascending `zIndex`.
-2. Ascending `scriptId`.
-3. Ascending `itemId`.
+1. Serialize overlays whose `updated` flag is true.
+2. Serialize pending removal keys.
+3. Clear the serialized overlays' `updated` flags.
+4. Clear the serialized pending-removal keys.
+5. Return both arrays, including empty arrays.
 
-This order is also the drawing order. Later items render over earlier items.
+Unchanged overlays are not returned. Polling changes only delivery state, not retained overlay state.
 
-All wire numbers must be finite. MessagePack unsigned values are used for `color` and `overlayUpdates` so the full ranges survive transport.
+`overlays` is sorted by ascending `zIndex`, `scriptId`, then `itemId`. `removed` is sorted by ascending `scriptId`, then `itemId`.
 
-## 7. Invocation Transactions and Revision Semantics
+The request must be an empty object. Extra fields return `invalid_request` with `details.command = 110` and the offending `details.field`.
 
-Each Lua invocation is one overlay transaction.
+## 5. Capabilities and Limits
 
-1. Before running a script, copy that script's retained items into a staging map.
-2. Draw, remove, and clear callbacks mutate only the staging map.
-3. Enforce per-script and total capacity against the staged result.
-4. On successful Lua completion, replace that script's live item set with the staged set.
-5. On Lua runtime failure, discard staging and remove all live items owned by that script.
-6. Compare the final live owner set with the set from before the invocation.
-7. Increment `overlayUpdates` once only when the final observable overlay changed.
+Advertise command `110` and:
 
-No IPC request is serviced during a Lua invocation because execution and requests are serialized on the emulation operation path. A client therefore cannot observe partial callback output. Staging still makes success, failure, capacity handling, and future refactoring explicit.
+```ts
+interface ScriptOverlayCapabilities {
+  scriptOverlaySchema: 1;
+  scriptOverlayRetained: true;
+  scriptOverlayConsumesUpdates: true;
+  scriptOverlayCoordinateSpaces: ['frame', 'normalized'];
+  scriptOverlayColorFormat: 'RRGGBBAA';
+  scriptOverlayLimits: {
+    maxItemsPerScript: 256;
+    maxItemsTotal: 1024;
+    maxTextBytes: 4096;
+    maxCoordinateMagnitude: 1000000;
+    maxFontSize: 512;
+    maxLineWidth: 512;
+  };
+}
+```
 
-The following operations use the same one-increment rule:
+Reject invalid item IDs, invalid UTF-8, NUL text, oversized text, unknown options, unsupported coordinate spaces, out-of-range colors, NaN, infinity, invalid dimensions, and capacity exhaustion. Lua API validation and capacity failures are script runtime errors.
 
-| Operation | Overlay effect |
+## 6. Lifecycle
+
+| Event | Overlay effect |
 |---|---|
-| Successful scheduled run or Run Once | Commit staged output |
-| Runtime failure or budget exhaustion | Remove all output owned by the failing script |
-| Path edit or explicit Compile | Remove output from the previous compiled generation, whether compilation succeeds or fails |
-| Edit setting `active: false` | Remove output owned by that script |
-| Disable | Remove output even if Activity was already false |
-| Delete | Remove output owned by the deleted script |
-| Delete All | Clear all output |
-| Reset, restart, or ROM load | Clear all output |
-| Debug detach | Clear all output |
-| Debugger destruction | Destroy all output |
-| TCP disconnect/reconnect | Preserve server output while the same debugger exists |
-| Stop/start execution | Preserve output |
+| Successful script execution | Keep callback changes |
+| Runtime failure or budget exhaustion | Remove all overlays owned by the script |
+| Path edit or Compile | Remove overlays from the previous compiled generation |
+| Edit setting `active: false` or Disable | Remove overlays owned by the script |
+| Delete | Remove overlays owned by the script |
+| Delete All | Remove all overlays |
+| Reset, restart, ROM load, or debug detach | Remove all overlays |
+| Stop/start execution | Preserve overlays |
+| TCP disconnect/reconnect | Preserve overlays |
+| Debugger destruction | Destroy overlays |
 
-Run Once may publish output for an inactive script. That output remains retained until the script changes or removes it, Disable is requested, compilation replaces the generation, the script is deleted, or a global lifecycle event clears it.
+Removal operations populate the pending-removal set only when a client is connected. On a new connection, discard stale pending removals and mark every retained overlay `updated = true` through the serialized hardware request path.
 
-A script-record `updates` revision and `overlayUpdates` may both change during one operation. They remain independent and each advances according to its own observable state.
+Run Once may create overlays for an inactive script. Those overlays follow the same lifecycle rules.
 
-## 8. Validation and Failures
-
-Lua API validation failures use `luaL_error`, become normal script runtime errors, and follow runtime-failure cleanup. Error messages identify the function and invalid argument or option.
-
-Reject:
-
-- Missing or extra positional arguments.
-- Unknown or inapplicable option fields.
-- Negative or out-of-range item IDs.
-- Invalid UTF-8, embedded NUL, or oversized text.
-- NaN, infinity, out-of-bound coordinates, dimensions, font sizes, or line widths.
-- Negative dimensions, non-positive font size, or non-positive line width.
-- Unsupported coordinate spaces or anchors.
-- Colors outside the unsigned 32-bit range.
-- Per-script or global item-capacity exhaustion.
-
-Capacity exhaustion is a script runtime error; it must not partially commit staged output.
-
-`DEBUG_SCRIPT_OVERLAY_GET` accepts exactly zero fields or exactly one `knownUpdates` unsigned integer field. Extra fields and invalid integer ranges return the normal `invalid_request` envelope with `details.command = 110` and the offending `details.field`.
-
-## 9. Concurrency and Ownership
-
-Lua execution, overlay mutation, lifecycle cleanup, snapshot construction, and revision changes run on the emulation operation path. The IPC server obtains state through `Hardware::Request()` and does not access `Scripts` directly.
-
-Once the obsolete in-process renderer path is removed, the overlay maps do not need a mutex for protocol correctness. If another in-process consumer is introduced, it must use the same serialized request path rather than retaining references into live maps.
-
-Snapshot construction copies values into JSON before returning. It never returns references, pointers, or iterators into overlay state.
-
-## 10. Client Rendering Requirements
-
-A conforming client:
-
-1. Negotiates `scriptOverlaySchema = 1`, command `110`, limits, coordinate spaces, and color format.
-2. Sends an unconditional snapshot request after connection.
-3. Stores the returned `overlayUpdates` and complete item array.
-4. Sends conditional requests with its last stored revision at its chosen display cadence.
-5. Replaces the complete local item array only when `changed` is true.
-6. Draws items in response order and clips them to the displayed framebuffer rectangle.
-7. Clears local output immediately on disconnect or when overlay capability disappears.
-8. Sends an unconditional request after reconnect rather than assuming the old local revision is valid for a new server lifetime.
-
-Clients may omit overlay rendering entirely. They must not interpret absence of the capability as a script failure.
-
-## 11. Server Tests
+## 7. Server Tests
 
 Cover:
 
-1. Command `110`, schema, limits, coordinate spaces, and color format advertisement.
-2. Strict empty/conditional request validation and structured errors.
-3. Empty unconditional, unchanged conditional, and changed conditional responses.
-4. Exact wire variants for text, outline rectangle, and filled rectangle.
-5. Default and explicit Lua options.
-6. Deterministic ordering by z-index, script ID, and item ID.
-7. Same-script upsert, primitive-type replacement, remove, clear, and idempotent no-ops.
-8. Equal item IDs in different scripts remaining independent.
-9. Multiple callback changes producing exactly one overlay revision increment per invocation.
-10. Identical final output producing no revision increment.
-11. Failed and budget-exhausted invocations committing no partial output and removing prior owner output.
-12. Inactive Run Once publishing retained output and Disable clearing it.
-13. Successful and failed compile clearing output from the previous generation.
-14. Disable, delete, delete-all, reset, restart, ROM-load, detach, and debugger-destruction cleanup.
-15. Stop/start and TCP reconnect preservation.
-16. Text UTF-8, NUL, and byte limits.
-17. Item ID, color, coordinate, dimension, font-size, line-width, anchor, and option validation.
-18. Per-script and total capacity boundaries and recovery after removal.
-19. Conditional polling while hardware is running.
-20. Focused tests under the existing CTest timeout and MSVC AddressSanitizer configuration.
+1. Command, schema, limits, coordinate spaces, and color format advertisement.
+2. Strict empty-request validation.
+3. Empty, updated-only, and removal responses.
+4. Consuming `updated` flags and pending removals.
+5. Identical calls producing no snapshot.
+6. Exact text, rectangle, and filled-rectangle wire variants.
+7. Defaults, explicit options, and validation failures.
+8. Script-scoped identity and equal item IDs in different scripts.
+9. Type replacement, explicit removal, clear, and idempotent removal.
+10. Deterministic overlay and removal ordering.
+11. Per-script and total capacity limits.
+12. Runtime failure and budget-exhaustion cleanup.
+13. Compile, disable, delete, reset, restart, ROM-load, and detach cleanup.
+14. Stop/start and reconnect preservation.
+15. Reconnect marking all retained overlays updated.
+16. Polling while hardware is running.
 
-## 12. Implementation Plan
-
-### Phase 1: Protocol and model
-
-1. Reserve public `Hardware::Req` value `110` as `DEBUG_SCRIPT_OVERLAY_GET`.
-2. Add overlay constants, tagged item types, owner-partitioned maps, staging state, and a dedicated `uint64_t overlayUpdates` to `Scripts`.
-3. Replace `UIItem`, `UIReqs`, `UIType`, `vectorScreenCoords`, `GetUIItems()`, and the UI mutex with the overlay model.
-4. Add deterministic JSON serialization and conditional snapshot construction.
-
-### Phase 2: Lua producer API
-
-1. Replace the three old callback parsers with strict schema-1 callback helpers.
-2. Add shared parsing for item ID, finite numbers, color, coordinate space, anchor, z-index, and options.
-3. Implement `DrawText`, `DrawRect`, `DrawRectFilled`, `RemoveDrawItem`, and `ClearDrawItems` against invocation staging.
-4. Add begin, commit, and abort transaction handling around `RunScript()`.
-5. Ensure every Lua error path removes the debug hook, resets current execution context, and resolves the overlay transaction.
-
-### Phase 3: Lifecycle integration
-
-1. Clear owner output on compile generation replacement, disable, and delete.
-2. Clear all output on delete-all, reset, restart, ROM load, debug detach, and debugger destruction.
-3. Preserve output across stop/start and TCP reconnect.
-4. Advance `overlayUpdates` exactly once for each operation that changes final overlay state.
-
-### Phase 4: IPC exposure
-
-1. Route command `110` through `Debugger::ReqHandling()` on the emulation path.
-2. Extend `IsSupportedCommand`, strict request validation, and server command advertisement.
-3. Add `scriptOverlaySchema`, behavior flags, coordinate spaces, color format, and limits to `GET_SERVER_INFO`.
-4. Translate malformed requests through the normal structured IPC error envelope.
-
-### Phase 5: Verification and documentation
-
-1. Add the complete test matrix from Section 11.
-2. Update `docs/ipc-protocol.md`, `docs/architecture.md`, and test-client guidance.
-3. Provide client-side TypeScript model examples and frame-coordinate mapping guidance.
-4. Run the focused IPC suite, full Release CTest suite, editor dashboard invocation, and MSVC AddressSanitizer focused suite.
-
-## 13. Implementation Checklist
+## 8. Implementation Checklist
 
 - [ ] Reserve and advertise `DEBUG_SCRIPT_OVERLAY_GET = 110`.
-- [ ] Add `scriptOverlaySchema = 1`, behavior flags, coordinate spaces, color format, and limits.
-- [ ] Replace obsolete UI types and mutex-protected global item IDs with script-scoped retained overlay state.
-- [ ] Add the independent `uint64` `overlayUpdates` revision.
-- [ ] Implement invocation staging, successful commit, failure cleanup, and one-increment semantics.
-- [ ] Implement strict options-based `DrawText`, `DrawRect`, and `DrawRectFilled`.
+- [ ] Add overlay wire types, limits, and capability fields.
+- [ ] Replace `UIItem`, `UIReqs`, `UIType`, `vectorScreenCoords`, and the UI mutex.
+- [ ] Store overlays by `(scriptId, itemId)` with internal `updated` flags.
+- [ ] Track pending removal keys.
+- [ ] Implement strict `DrawText`, `DrawRect`, and `DrawRectFilled` callbacks.
 - [ ] Implement `RemoveDrawItem` and `ClearDrawItems`.
-- [ ] Enforce UTF-8, finite-number, range, option, and resource-limit validation.
-- [ ] Implement deterministic tagged-variant snapshot serialization.
-- [ ] Implement unconditional and conditional overlay snapshot responses.
-- [ ] Integrate compile, disable, delete, reset, restart, ROM-load, detach, and destruction cleanup.
-- [ ] Preserve output across stop/start and reconnect.
-- [ ] Add all server tests from Section 11.
-- [ ] Update public protocol, architecture, and client documentation.
-- [ ] Run focused, full-suite, editor-dashboard, and sanitizer validation.
+- [ ] Return and consume only updated overlays and pending removals.
+- [ ] Integrate lifecycle cleanup and reconnect initialization.
+- [ ] Add the server tests from Section 7.
+- [ ] Update public protocol and architecture documentation.
+- [ ] Run focused tests, the full CTest suite, and sanitizer validation.
