@@ -18,8 +18,11 @@ Advertise through `GET_SERVER_INFO.capabilities`:
 interface ScriptLimits {
   maxNameBytes: number;
   maxPathBytes: number;
+  maxSourceBytes: number;
   maxRecords: number;
   maxErrorBytes: number;
+  maxInstructionsPerRun: number;
+  maxExecutionMilliseconds: number;
 }
 
 interface ScriptCapabilities {
@@ -30,6 +33,7 @@ interface ScriptCapabilities {
   scriptRunOnce: true;
   scriptBulkDisable: true;
   scriptMutationsWhileRunning: boolean;
+  scriptRunOnceWhileRunning: boolean;
   scriptLimits: ScriptLimits;
 }
 ```
@@ -49,9 +53,15 @@ type ScriptCompilation =
   | { status: 'compiled'; error: null }
   | { status: 'error'; error: string };
 
+type ScriptRuntime =
+  | { status: 'never_run'; error: null }
+  | { status: 'succeeded'; error: null }
+  | { status: 'error'; error: string };
+
 interface ScriptSnapshot extends ScriptInput {
   scriptId: number;
   compilation: ScriptCompilation;
+  runtime: ScriptRuntime;
 }
 
 interface ScriptIdRequest {
@@ -59,17 +69,30 @@ interface ScriptIdRequest {
 }
 
 interface ScriptMutationResponse {
-  scriptId: number;
+  updates: number;
+  script: ScriptSnapshot;
+}
+
+interface ScriptCollectionResponse {
+  updates: number;
+  scripts: ScriptSnapshot[];
 }
 
 interface ScriptRunOnceResponse {
   scriptId: number;
   succeeded: boolean;
+  breakRequested: boolean;
+  updates: number;
+  runtime: ScriptRuntime;
   error?: string;
 }
 ```
 
-`name`, `path`, and `active` are client-writable. `scriptId` and `compilation` are server-owned. Returned paths are absolute and normalized for the server platform.
+`name`, `path`, and `active` are client-writable. `active` is the user's requested scheduling state and is never rewritten as a consequence of compilation or runtime failure. `scriptId`, `compilation`, and `runtime` are server-owned.
+
+A script is eligible for scheduled execution only when `active` is true, `compilation.status` is `compiled`, and `runtime.status` is not `error`. `RUN_ONCE` ignores `active` and may retry a script in runtime-error state, but it requires a compiled function. Compilation state always takes priority: a script without a successfully compiled function is never executed.
+
+Paths use a platform-neutral UTF-8 wire representation with `/` separators. Windows drive paths use `C:/...` and UNC paths use `//server/share/...`; POSIX paths use `/...`. The server converts the wire path to its native `std::filesystem::path`, applies lexical normalization, and returns the normalized generic UTF-8 representation. It does not resolve symlinks or require the target to exist during normalization.
 
 ## 4. Commands
 
@@ -77,15 +100,15 @@ IDs `105..109` are proposed and must be confirmed before release.
 
 | Command | ID | Request | Successful data |
 |---|---:|---|---|
-| `DEBUG_SCRIPT_ADD` | 84 | `ScriptInput` | `{ scriptId }` |
+| `DEBUG_SCRIPT_ADD` | 84 | `ScriptInput` | `ScriptMutationResponse` |
 | `DEBUG_SCRIPT_DEL_ALL` | 85 | Empty object | No data |
 | `DEBUG_SCRIPT_DEL` | 86 | `{ scriptId }` | No data |
-| `DEBUG_SCRIPT_GET_ALL` | 87 | Empty object | `ScriptSnapshot[]` |
+| `DEBUG_SCRIPT_GET_ALL` | 87 | Empty object | `ScriptCollectionResponse` |
 | `DEBUG_SCRIPT_GET_UPDATES` | 88 | Empty object | `{ updates: uint32 }` |
-| `DEBUG_SCRIPT_EDIT` | 105 | `{ scriptId, ...ScriptInput }` | `{ scriptId }` |
-| `DEBUG_SCRIPT_COMPILE` | 106 | `{ scriptId }` | `{ scriptId }` |
+| `DEBUG_SCRIPT_EDIT` | 105 | `{ scriptId, ...ScriptInput }` | `ScriptMutationResponse` |
+| `DEBUG_SCRIPT_COMPILE` | 106 | `{ scriptId }` | `ScriptMutationResponse` |
 | `DEBUG_SCRIPT_RUN_ONCE` | 107 | `{ scriptId }` | `ScriptRunOnceResponse` |
-| `DEBUG_SCRIPT_DISABLE` | 108 | `{ scriptId }` | `{ scriptId }` |
+| `DEBUG_SCRIPT_DISABLE` | 108 | `{ scriptId }` | `ScriptMutationResponse` |
 | `DEBUG_SCRIPT_DISABLE_ALL` | 109 | Empty object | `{ disabled: number }` |
 
 ### Add
@@ -93,32 +116,42 @@ IDs `105..109` are proposed and must be confirmed before release.
 - Create only; the server allocates a monotonic non-negative ID.
 - Duplicate names and paths are allowed.
 - Normalize the path, create the record, read the file, and compile it.
-- A missing, unreadable, non-regular, or invalid Lua file creates the record in compilation-error state with `active: false`.
+- A missing, unreadable, non-regular, or invalid Lua file creates the record in compilation-error state without changing the requested `active` value.
+- Initialize runtime state to `never_run`.
+- Return the resulting snapshot, including compilation failure, as a successful mutation response.
 
 ### Edit
 
 - Replace all writable fields while preserving `scriptId`.
 - Name-only and Activity-only changes preserve the compiled function and compilation state.
 - A Path change reads and compiles the new file.
-- A failed Path compile stores the error, disables the record, and leaves no stale runnable function.
+- A Path change resets runtime state to `never_run`.
+- A failed Path compile stores the compilation error and leaves no stale runnable function. It does not change `active`.
+- Setting `active: true` on a script in compilation-error or runtime-error state is valid, but does not make the script eligible for scheduled execution.
 
 ### Compile
 
 - Re-read and compile the record's current Path.
 - Success replaces the compiled function and clears the previous error without changing requested Activity.
-- Failure removes any stale runnable function, stores the bounded error, and sets `active: false`.
+- Failure removes any stale runnable function and stores the bounded compilation error without changing requested Activity.
+- Every completed Compile resets runtime state to `never_run` because the result applies to a new compiled generation or to no compiled function.
+- Return the resulting snapshot so compilation failures do not require a follow-up query.
 
 ### Run Once
 
-- Execute the current compiled function once without changing Activity.
-- Success returns `succeeded: true`, stores no execution metadata, and does not increment the update counter.
-- Runtime failure returns `succeeded: false`, stores the bounded error, disables the script, and increments the update counter when observable state changes.
-- Define and test how script `Break()` affects emulator stop state.
+- Execute the current compiled function once without reading or changing Activity.
+- Execute on the emulation operation path using the current CPU, memory, I/O, and display states supplied to the debugger request handler. This is valid while stopped and, when `scriptRunOnceWhileRunning` is true, at the next serialized request boundary while running.
+- Reject a script whose compilation status is not `compiled` with `invalid_request`, `details.field = "scriptId"`, and `details.reason = "not_compiled"`.
+- Success stores runtime status `succeeded` and returns `succeeded: true`.
+- Runtime failure, including instruction-budget exhaustion, stores the bounded runtime error and returns `succeeded: false`. It does not change `active` or compilation state.
+- A successful retry replaces runtime-error state with `succeeded`, allowing an active script to resume scheduled execution.
+- `Break()` completes the current Lua invocation, returns `breakRequested: true`, transitions the emulator to stopped state, and publishes a stop record with reason `script` and the triggering `scriptId`. `Break()` is not a runtime error.
 
 ### Disable
 
 - Idempotently set one record's Activity to false.
 - Preserve its compiled function and compilation state.
+- Preserve its runtime state.
 
 ### Disable All
 
@@ -138,22 +171,29 @@ IDs `105..109` are proposed and must be confirmed before release.
 
 ### Get All
 
-- Always return an array, including `[]`.
+- Return `{ updates, scripts }` as one coherent snapshot taken on the emulation thread; `scripts` is always an array, including `[]`.
 - Order snapshots by ascending `scriptId`.
 
 ### Get Updates
 
 - Return a non-consuming wrapping `uint32` counter.
-- Increment for effective Add, Edit, Compile-result change, Activity change, runtime-error state change, and Delete.
-- Do not increment for rejected requests or no-op Disable, Delete, Disable All, or Delete All.
+- Treat the counter as the collection revision and increment it once per command that changes observable collection state, regardless of how many records the command changes.
+- Add always increments once. Edit increments once only when a normalized writable field changes. Compile increments once whenever a compile attempt completes because the compiled generation may have changed even when its public status did not.
+- Runtime transitions among `never_run`, `succeeded`, and `error`, including a changed runtime error string, increment once. Repeated successful executions and repeated identical runtime failures do not increment.
+- Activity changes and effective Delete operations increment once.
+- Do not increment for rejected requests or no-op Edit, Disable, Delete, Disable All, or Delete All.
 
 ## 5. Validation and Errors
 
 - Reject missing, extra, mistyped, invalid UTF-8, and over-limit fields.
-- Require absolute paths; normalize them before storage.
+- Require non-empty names and absolute paths in the wire format described above. Normalize paths before storage.
+- Apply `maxNameBytes` to the UTF-8 name and `maxPathBytes` to the normalized generic UTF-8 path.
+- Before allocating a source buffer, reject a file larger than `maxSourceBytes` into compilation-error state. Read files in binary mode, require valid UTF-8 Lua source without NUL bytes, and pass the exact byte length to Lua rather than relying on NUL termination.
 - IDs are integers in `0..2147483647` and are not reused during one collection lifetime.
 - Enforce `maxRecords` and detect ID exhaustion before allocation.
 - Bound errors to `maxErrorBytes` without producing invalid UTF-8.
+- Limit each scheduled or Run Once invocation to both `maxInstructionsPerRun` Lua VM instructions and `maxExecutionMilliseconds` elapsed wall-clock time using a Lua debug hook. Budget exhaustion is a runtime error. The hook must be removed after every invocation, including error paths.
+- Do not expose unbounded blocking Lua standard-library operations such as process execution, dynamic native-library loading, or blocking file/process pipes. Every server-provided Lua callback must itself be bounded so execution cannot remain inside native code beyond the advertised deadline.
 - Unknown IDs for Edit, Compile, Run Once, and Disable are invalid requests. Delete is a no-op.
 
 Use the normal IPC error envelope:
@@ -180,10 +220,12 @@ File-read and Lua compilation failures are retained record state, not failed IPC
 
 - Serialize file I/O, Lua compilation, registry mutation, and execution on the server-owned emulation operation path.
 - Publish snapshots only after an operation reaches a coherent state.
-- Advertise whether mutations and Run Once are accepted while execution is running.
+- Advertise independently whether mutations and Run Once are accepted while execution is running. A request accepted while running executes at the next emulation-thread request boundary.
 - Records, IDs, compiled functions, statuses, and update counter survive reset, restart, ROM load, and TCP reconnect while the same debugger/Lua environment exists.
 - Destroying the debugger clears the collection and permits IDs to restart in the new lifetime.
-- Document whether reset clears script-created UI output and how active scripts behave when debug callbacks are detached.
+- Debug detachment suspends scheduled script execution without changing `active` or any record state. Reattachment resumes eligible scripts.
+- Lua globals and other Lua-environment side effects are shared by all scripts and survive reset, restart, ROM load, reconnect, compile, disable, and delete. They are released only when the debugger/Lua environment is destroyed. Clients must not treat deleting a record as undoing arbitrary Lua side effects.
+- Track the currently executing `scriptId` as the owner of each script-created UI item. Replacing an item transfers ownership to the latest writer. Remove UI items owned by a script when it becomes inactive or non-runnable, or when it is deleted. Clear all script-created UI output on reset, restart, ROM load, debug detachment, Delete All, and debugger destruction. Eligible scripts recreate their output after execution resumes.
 
 ## 7. Server Tests
 
@@ -192,12 +234,12 @@ Cover:
 1. Capability and command advertisement.
 2. Empty and ascending-ID Get All responses.
 3. Monotonic IDs, duplicate names/paths, capacity, and ID exhaustion.
-4. Add and Path-edit compile success, syntax failure, missing file, unreadable file, and oversized error truncation.
-5. Name-only and Activity-only edits preserving compiled state.
+4. Add and Path-edit compile success, syntax failure, missing file, unreadable file, source-size limit, source UTF-8/NUL validation, and oversized error truncation.
+5. Name-only and Activity-only edits preserving compiled and runtime state; compilation priority over requested Activity.
 6. Explicit Compile replacing source and preventing stale execution after failure.
-7. Run Once success, runtime error, Activity preservation, and `Break()` behavior.
+7. Run Once while stopped and running, runtime success/error recovery, instruction and wall-clock budget exhaustion, unavailable blocking APIs, Activity preservation, current hardware-state access, and `Break()` stop records.
 8. Idempotent Disable/Delete and atomic Disable All/Delete All.
-9. Exact update-counter increments, no-op behavior, and wraparound.
-10. Missing/extra/wrong-type fields, invalid UTF-8, path limits, relative paths, and unknown IDs.
-11. Reset, restart, ROM load, reconnect, debugger replacement, and running-state behavior.
-12. Lua registry references are released on replacement and deletion.
+9. Exact one-per-command update-counter increments, coherent `{ updates, scripts }` snapshots, no-op behavior, and wraparound.
+10. Missing/extra/wrong-type fields, invalid UTF-8, cross-platform path forms and normalization, path limits, relative paths, and unknown IDs.
+11. Reset, restart, ROM load, reconnect, debug detach/reattach, debugger replacement, and running-state behavior.
+12. Lua registry references are released on replacement and deletion; Lua globals and owned UI output follow the documented lifecycle.
