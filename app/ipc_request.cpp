@@ -1,6 +1,8 @@
 #include "ipc_request.h"
 
+#include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <string_view>
 #include <unordered_set>
@@ -8,6 +10,7 @@
 #include "core/breakpoint.h"
 #include "core/code_perf.h"
 #include "core/hardware.h"
+#include "core/scripts.h"
 #include "core/trace_log.h"
 #include "ipc/commands.h"
 
@@ -39,7 +42,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-				command <= static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW);
+				command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -99,6 +102,75 @@ namespace
 			index += continuationCount + 1;
 		}
 		return true;
+	}
+
+	auto NormalizeScriptPath(const std::string& wirePath) -> std::optional<std::string>
+	{
+		if (wirePath.empty() || wirePath.find('\\') != std::string::npos) return std::nullopt;
+#ifdef _WIN32
+		const bool driveAbsolute = wirePath.size() >= 3 &&
+			std::isalpha(static_cast<unsigned char>(wirePath[0])) &&
+			wirePath[1] == ':' && wirePath[2] == '/';
+		const bool uncAbsolute = wirePath.starts_with("//") && wirePath.size() > 2;
+		if (!driveAbsolute && !uncAbsolute) return std::nullopt;
+#else
+		if (!wirePath.starts_with('/') || wirePath.starts_with("//")) return std::nullopt;
+#endif
+		const auto normalized = std::filesystem::u8path(wirePath).lexically_normal().generic_u8string();
+		return std::string(reinterpret_cast<const char*>(normalized.data()), normalized.size());
+	}
+
+	auto ValidateScriptInput(nlohmann::json& data, const int command, const bool requireId = false)
+		-> std::optional<dev::server::RequestError>
+	{
+		const std::unordered_set<std::string_view> fields = {"name", "path", "active"};
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+		for (const auto& [name, value] : data.items()) {
+			if (!fields.contains(name) && !(requireId && name == "scriptId"))
+				return invalid(name, "is not supported");
+		}
+		uint64_t scriptId = 0;
+		if (requireId && (!data.contains("scriptId") ||
+			!ReadUnsigned(data["scriptId"], scriptId) ||
+			scriptId > static_cast<uint64_t>(std::numeric_limits<dev::Id>::max())))
+			return invalid("scriptId", "must be a non-negative server script ID");
+		if (!data.contains("name") || !data["name"].is_string() ||
+			data["name"].get_ref<const std::string&>().empty() ||
+			data["name"].get_ref<const std::string&>().size() > dev::Scripts::MAX_NAME_BYTES ||
+			!IsValidUtf8(data["name"].get_ref<const std::string&>()))
+			return invalid("name", "must be a non-empty UTF-8 string within maxNameBytes");
+		if (!data.contains("path") || !data["path"].is_string() ||
+			!IsValidUtf8(data["path"].get_ref<const std::string&>()))
+			return invalid("path", "must be a UTF-8 absolute path");
+		auto normalized = NormalizeScriptPath(data["path"].get_ref<const std::string&>());
+		if (!normalized || normalized->size() > dev::Scripts::MAX_PATH_BYTES)
+			return invalid("path", "must be an absolute normalized path within maxPathBytes");
+		data["path"] = std::move(*normalized);
+		if (!data.contains("active") || !data["active"].is_boolean())
+			return invalid("active", "must be boolean");
+		return std::nullopt;
+	}
+
+	auto ValidateScriptId(const nlohmann::json& data, const int command)
+		-> std::optional<dev::server::RequestError>
+	{
+		auto invalid = [command](const std::string& field, const std::string& requirement) {
+			return dev::server::RequestError{"invalid_request",
+				"command " + std::to_string(command) + " field " + field + " " + requirement,
+				{{"command", command}, {"field", field}}};
+		};
+		if (data.size() != 1 || !data.contains("scriptId"))
+			return invalid(data.empty() ? "scriptId" : data.items().begin().key(),
+				"must be the only field");
+		uint64_t scriptId = 0;
+		if (!ReadUnsigned(data["scriptId"], scriptId) ||
+			scriptId > static_cast<uint64_t>(std::numeric_limits<dev::Id>::max()))
+			return invalid("scriptId", "must be a non-negative server script ID");
+		return std::nullopt;
 	}
 
 	auto ValidateStructuredWatchpoint(const nlohmann::json& data, const int command, const bool requireId = false)
@@ -461,6 +533,25 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT)) {
 		if (auto error = ValidateCodePerfInput(data, command, true)) return *error;
 	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_ADD)) {
+		if (auto error = ValidateScriptInput(data, command)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_EDIT)) {
+		if (auto error = ValidateScriptInput(data, command, true)) return *error;
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DEL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE)) {
+		if (auto error = ValidateScriptId(data, command)) return *error;
+	}
+	if ((command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DEL_ALL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL)) && !data.empty()) {
+		return RequestError{"invalid_request", "command " + std::to_string(command) +
+			" does not accept data", {{"command", command}, {"field", data.items().begin().key()}}};
+	}
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER)) {
 		if (auto error = ValidateTraceLogFilter(data, command)) return *error;
 	}
@@ -532,7 +623,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL); ++command) {
 		commands.push_back(command);
 	}
 
@@ -549,6 +640,23 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"watchpointSchema", 1},
 			{"memoryEditSchema", 1},
 			{"codePerfSchema", 1},
+			{"scriptSchema", 1},
+			{"scriptServerAllocatedIds", true},
+			{"scriptPathSources", true},
+			{"scriptExplicitCompile", true},
+			{"scriptRunOnce", true},
+			{"scriptBulkDisable", true},
+			{"scriptMutationsWhileRunning", true},
+			{"scriptRunOnceWhileRunning", true},
+			{"scriptLimits", {
+				{"maxNameBytes", dev::Scripts::MAX_NAME_BYTES},
+				{"maxPathBytes", dev::Scripts::MAX_PATH_BYTES},
+				{"maxSourceBytes", dev::Scripts::MAX_SOURCE_BYTES},
+				{"maxRecords", dev::Scripts::MAX_RECORDS},
+				{"maxErrorBytes", dev::Scripts::MAX_ERROR_BYTES},
+				{"maxInstructionsPerRun", dev::Scripts::MAX_INSTRUCTIONS_PER_RUN},
+				{"maxExecutionMilliseconds", dev::Scripts::MAX_EXECUTION_MILLISECONDS}
+			}},
 			{"stopRecordSchema", 1},
 			{"hardwareStatsSchema", 1},
 			{"hardwareStatsWhileRunning", true},

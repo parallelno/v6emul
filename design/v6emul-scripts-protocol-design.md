@@ -243,3 +243,26 @@ Cover:
 10. Missing/extra/wrong-type fields, invalid UTF-8, cross-platform path forms and normalization, path limits, relative paths, and unknown IDs.
 11. Reset, restart, ROM load, reconnect, debug detach/reattach, debugger replacement, and running-state behavior.
 12. Lua registry references are released on replacement and deletion; Lua globals and owned UI output follow the documented lifecycle.
+
+## 8. Implementation Checklist
+
+- [ ] Confirm and reserve command IDs `105..109` in `Hardware::Req`.
+- [ ] Define script limits and expose all script capabilities through `GET_SERVER_INFO`.
+- [ ] Replace the legacy script record with server-owned ID, normalized path, requested Activity, compilation state, runtime state, and Lua registry reference.
+- [ ] Move ID allocation and the wrapping update revision into the `Scripts` collection; enforce capacity and ID exhaustion.
+- [ ] Implement strict UTF-8 request validation, exact-field validation, portable absolute-path parsing, lexical normalization, and configured byte limits.
+- [ ] Implement bounded binary source loading, regular-file checks, UTF-8/NUL validation, and length-aware Lua compilation.
+- [ ] Implement registry-reference replacement so failed recompilation and deletion cannot leave stale runnable functions or leak references.
+- [ ] Implement Add, Edit, Compile, Disable, Disable All, Delete, Delete All, Get All, and Get Updates with the specified no-op and revision semantics.
+- [ ] Return coherent mutation snapshots and atomic `{ updates, scripts }` collection snapshots ordered by `scriptId`.
+- [ ] Implement scheduled-execution eligibility from requested Activity, compilation state, and runtime state without rewriting Activity after failures.
+- [ ] Implement Run Once with current hardware state, runtime-state updates, retry behavior, and running-state capability enforcement.
+- [ ] Add Lua instruction and wall-clock budgets, guaranteed hook cleanup, bounded server callbacks, and removal of unbounded blocking standard-library APIs.
+- [ ] Implement `Break()` propagation to emulator stop state and publish a `script` stop record containing `scriptId`.
+- [ ] Track UI-item ownership by executing `scriptId` and implement cleanup on inactivity, failure, deletion, reset, restart, ROM load, debug detachment, and debugger destruction.
+- [ ] Preserve records and Lua-environment state across reset, restart, ROM load, and reconnect; suspend and resume scheduled execution across debug detach/reattach.
+- [ ] Translate collection, validation, unknown-ID, and not-compiled failures into the documented structured IPC errors.
+- [ ] Remove the legacy `{ id, active, code, comment }` request and response behavior from commands `84..88`.
+- [ ] Update protocol documentation and test-client helpers for schema 1 commands, capabilities, snapshots, and errors.
+- [ ] Add the complete server-test matrix from Section 7, including exact revision increments, resource exhaustion, cleanup, and lifecycle cases.
+- [ ] Run focused script/core tests, IPC tests, the full CTest suite, and leak/sanitizer checks where available.

@@ -1,80 +1,98 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <unordered_map>
-#include <mutex>
 
 #include <lua.hpp>
+#include <nlohmann/json.hpp>
 
-#include "utils/json_utils.h"
-#include "utils/types.h"
-#include "core/script.h"
 #include "core/cpu_i8080.h"
-#include "core/memory.h"
-#include "core/io.h"
 #include "core/display.h"
-
+#include "core/io.h"
+#include "core/memory.h"
+#include "core/script.h"
+#include "utils/types.h"
 
 namespace dev
 {
-	struct Scripts
+	class Scripts
 	{
 	public:
-		enum UIType {
-			NONE = 0,
-			TEXT,
-			RECT,
-			RECT_FILLED,
-		};
-		struct UIItem{
+		static constexpr size_t MAX_NAME_BYTES = 1024;
+		static constexpr size_t MAX_PATH_BYTES = 4096;
+		static constexpr size_t MAX_SOURCE_BYTES = 1024 * 1024;
+		static constexpr size_t MAX_RECORDS = 256;
+		static constexpr size_t MAX_ERROR_BYTES = 4096;
+		static constexpr int MAX_INSTRUCTIONS_PER_RUN = 100000;
+		static constexpr int MAX_EXECUTION_MILLISECONDS = 25;
+
+		enum UIType { NONE = 0, TEXT, RECT, RECT_FILLED };
+
+		struct UIItem {
 			UIType type = NONE;
 			float x = 0;
 			float y = 0;
 			float width = 0;
 			float height = 0;
-			std::string text = "";
+			std::string text;
 			uint32_t color = 0xFFFFFFFF;
 			bool vectorScreenCoords = true;
+			Id ownerScriptId = -1;
 		};
-		// Used by Lua to request UI items rendering in the UI thread
-		using UIReqs = std::unordered_map<dev::Id, UIItem>;
-		using ScriptMap = std::unordered_map<dev::Id, Script>;
 
+		struct RunResult {
+			bool succeeded;
+			bool breakRequested;
+		};
+
+		using UIReqs = std::unordered_map<Id, UIItem>;
+		using ScriptMap = std::unordered_map<Id, Script>;
 		using LabelAddrFunc = std::function<int(const std::string&)>;
 
-		Scripts(LabelAddrFunc _getLabelAddrFunc);
+		explicit Scripts(LabelAddrFunc getLabelAddrFunc);
 		~Scripts();
-		void Add(Script&& _script);
-		void Add(const nlohmann::json& _scriptJ);
-		auto Find(const dev::Id _id) -> const Script*;
-		void Del(const dev::Id _id);
-		bool Check(const CpuI8080::State* _cpuStateP,
-					const Memory::State* _memStateP,
-					const IO::State* _ioStateP,
-					const Display::State* _displayStateP);
-		auto GetAll() -> const ScriptMap&;
-		auto GetUpdates() -> const uint32_t;
+
+		auto Add(const nlohmann::json& input) -> const Script&;
+		auto Edit(Id scriptId, const nlohmann::json& input) -> const Script&;
+		auto Compile(Id scriptId) -> const Script&;
+		auto RunOnce(Id scriptId, const CpuI8080::State* cpuState,
+			const Memory::State* memState, const IO::State* ioState,
+			const Display::State* displayState) -> RunResult;
+		auto Disable(Id scriptId) -> const Script&;
+		auto DisableAll() -> size_t;
+		void Del(Id scriptId);
 		void Clear();
-		auto GetUIItems() -> const UIReqs
-		{
-			std::lock_guard<std::mutex> mlock(m_uiReqsMutex);
-			UIReqs uiReqs;
-			uiReqs.reserve(m_uiReqs.size());
-			for (const auto& [id, item] : m_uiReqs)
-			{
-				uiReqs[id] = item;
-			}
-			return uiReqs;
-		}
+
+		auto Check(const CpuI8080::State* cpuState, const Memory::State* memState,
+			const IO::State* ioState, const Display::State* displayState) -> bool;
+		auto Get(Id scriptId) const -> const Script&;
+		auto GetAllJson() const -> nlohmann::json;
+		auto GetUpdates() const -> uint32_t { return m_updates; }
+		auto GetBreakScriptId() const -> Id { return m_breakScriptId; }
+		auto GetUIItems() const -> UIReqs;
+		void ClearUIItems();
 
 	private:
 		void RegisterCppFunctions();
-		void CompileScript(Script& _script);
-		void RunScript(int _scriptRef);
+		void CompileScript(Script& script);
+		auto RunScript(Script& script) -> RunResult;
+		auto FindRequired(Id scriptId) -> Script&;
+		void ReleaseReference(Script& script);
+		void RemoveUIItems(Id scriptId);
+		void SetExecutionState(const CpuI8080::State* cpuState,
+			const Memory::State* memState, const IO::State* ioState,
+			const Display::State* displayState);
+		static void InstructionHook(lua_State* state, lua_Debug* debug);
 
 		ScriptMap m_scripts;
-		uint32_t m_updates = 0; // counts number of updates
-		lua_State* m_luaState;
+		uint32_t m_updates = 0;
+		Id m_nextScriptId = 0;
+		bool m_idsExhausted = false;
+		lua_State* m_luaState = nullptr;
 		bool m_enabled = false;
 
 		const CpuI8080::State* m_cpuStateP = nullptr;
@@ -82,10 +100,13 @@ namespace dev
 		const IO::State* m_ioStateP = nullptr;
 		const Display::State* m_displayStateP = nullptr;
 		bool m_break = false;
+		Id m_currentScriptId = -1;
+		Id m_breakScriptId = -1;
+		int m_instructionCount = 0;
+		std::chrono::steady_clock::time_point m_executionDeadline;
 
 		UIReqs m_uiReqs;
-		std::mutex m_uiReqsMutex;
-
-		LabelAddrFunc GetLabelAddrFunc;
+		mutable std::mutex m_uiReqsMutex;
+		LabelAddrFunc m_getLabelAddrFunc;
 	};
 }

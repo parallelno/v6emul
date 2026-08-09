@@ -205,6 +205,30 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 			};
 			server.Send(dev::ipc::Encode(errorResponse));
 			continue;
+		} catch (const dev::ScriptNotFound& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {
+				{"command", cmdInt}, {"field", "scriptId"}, {"scriptId", error.GetScriptId()}
+			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
+		} catch (const dev::ScriptNotCompiled& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {
+				{"command", cmdInt}, {"field", "scriptId"},
+				{"scriptId", error.GetScriptId()}, {"reason", "not_compiled"}
+			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
+		} catch (const dev::ScriptAddError& error) {
+			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
+			errorResponse["details"] = {
+				{"command", cmdInt}, {"field", "collection"},
+				{"reason", error.GetFailure() == dev::ScriptAddFailure::CAPACITY ?
+					"capacity" : "id_exhausted"}
+			};
+			server.Send(dev::ipc::Encode(errorResponse));
+			continue;
 		} catch (const dev::TraceLogQueryError& error) {
 			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
 			errorResponse["details"] = {{"command", cmdInt}};

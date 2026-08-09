@@ -625,6 +625,10 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 
 	case Req::DEBUG_ATTACH:
 		m_debugAttached = dataJ["data"];
+		if (!m_debugAttached && DebugReqHandling) {
+			DebugReqHandling(Req::INTERNAL_CLEAR_SCRIPT_UI, {},
+				m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		}
 		break;
 
 	case Req::LOAD_ROM:
@@ -687,6 +691,8 @@ void dev::Hardware::Reset()
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		DebugReqHandling(Req::INTERNAL_CLEAR_SCRIPT_UI, {},
+			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 	}
 }
 
@@ -700,6 +706,8 @@ void dev::Hardware::Restart()
 	m_memory.Restart();
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
+			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		DebugReqHandling(Req::INTERNAL_CLEAR_SCRIPT_UI, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 	}
 }
@@ -1003,4 +1011,10 @@ auto dev::Hardware::GetStepOverAddr()
 		}
 	}
 	return next_pc;
+}
+
+void dev::Hardware::StopForScript(Id scriptId)
+{
+	Stop(false);
+	RecordStop("script", {{"scriptId", scriptId}, {"description", "Lua script requested a stop"}});
 }

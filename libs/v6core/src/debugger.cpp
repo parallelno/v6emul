@@ -171,7 +171,10 @@ bool dev::Debugger::Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP
 			{"description", std::format("Breakpoint at 0x{:04X}", address)}
 		});
 	} else if (break_) {
-		m_hardware.RecordStop("unknown", {{"description", "Debugger requested a stop"}});
+		const auto scriptId = m_debugData.GetScripts().GetBreakScriptId();
+		m_hardware.RecordStop("script", {
+			{"scriptId", scriptId}, {"description", "Lua script requested a stop"}
+		});
 	}
 
 	// tracelog
@@ -468,6 +471,9 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 	case Hardware::Req::INTERNAL_INVALIDATE_TRACE_LOG_FILTER:
 		m_traceLog.InvalidateQuery();
 		break;
+	case Hardware::Req::INTERNAL_CLEAR_SCRIPT_UI:
+		m_debugData.GetScripts().ClearUIItems();
+		break;
 
 	case Hardware::Req::DEBUG_CODE_PERF_DEL_ALL:
 		m_debugData.DelAllCodePerfs();
@@ -527,22 +533,53 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_SCRIPT_DEL:
-		m_debugData.GetScripts().Del(_reqDataJ["id"]);
+		m_debugData.GetScripts().Del(_reqDataJ["scriptId"]);
 		break;
 
 	case Hardware::Req::DEBUG_SCRIPT_ADD: {
-		m_debugData.GetScripts().Add(_reqDataJ);
+		const auto& script = m_debugData.GetScripts().Add(_reqDataJ);
+		out = {{"updates", m_debugData.GetScripts().GetUpdates()}, {"script", script.ToJson()}};
 		break;
 	}
+	case Hardware::Req::DEBUG_SCRIPT_EDIT: {
+		const auto& script = m_debugData.GetScripts().Edit(_reqDataJ["scriptId"], _reqDataJ);
+		out = {{"updates", m_debugData.GetScripts().GetUpdates()}, {"script", script.ToJson()}};
+		break;
+	}
+	case Hardware::Req::DEBUG_SCRIPT_COMPILE: {
+		const auto& script = m_debugData.GetScripts().Compile(_reqDataJ["scriptId"]);
+		out = {{"updates", m_debugData.GetScripts().GetUpdates()}, {"script", script.ToJson()}};
+		break;
+	}
+	case Hardware::Req::DEBUG_SCRIPT_RUN_ONCE: {
+		const Id scriptId = _reqDataJ["scriptId"];
+		const auto result = m_debugData.GetScripts().RunOnce(
+			scriptId, _cpuStateP, _memStateP, _ioStateP, _displayStateP);
+		if (result.breakRequested) m_hardware.StopForScript(scriptId);
+		const auto& script = m_debugData.GetScripts().Get(scriptId);
+		out = {
+			{"scriptId", scriptId}, {"succeeded", result.succeeded},
+			{"breakRequested", result.breakRequested},
+			{"updates", m_debugData.GetScripts().GetUpdates()},
+			{"runtime", script.ToJson()["runtime"]}
+		};
+		if (!result.succeeded) out["error"] = script.runtimeError;
+		break;
+	}
+	case Hardware::Req::DEBUG_SCRIPT_DISABLE: {
+		const auto& script = m_debugData.GetScripts().Disable(_reqDataJ["scriptId"]);
+		out = {{"updates", m_debugData.GetScripts().GetUpdates()}, {"script", script.ToJson()}};
+		break;
+	}
+	case Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL:
+		out = {{"disabled", m_debugData.GetScripts().DisableAll()}};
+		break;
 	case Hardware::Req::DEBUG_SCRIPT_GET_UPDATES:
 		out = nlohmann::json{ {"updates", static_cast<uint64_t>(m_debugData.GetScripts().GetUpdates()) } };
 		break;
 
 	case Hardware::Req::DEBUG_SCRIPT_GET_ALL:
-		for (const auto& [id, script] : m_debugData.GetScripts().GetAll())
-		{
-			out.push_back(script.ToJson());
-		}
+		out = m_debugData.GetScripts().GetAllJson();
 		break;
 
 	//////////////////

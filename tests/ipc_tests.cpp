@@ -5,6 +5,8 @@
 #include <chrono>
 #include <cstring>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 
 #include "core/hardware.h"
 #include "core/debugger.h"
@@ -1839,6 +1841,94 @@ static void test_trace_log_queries()
 	ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(invalid));
 }
 
+static void test_script_protocol()
+{
+	const auto tempDir = std::filesystem::temp_directory_path() /
+		("v6emul-script-tests-" + std::to_string(
+			std::chrono::steady_clock::now().time_since_epoch().count()));
+	std::filesystem::create_directories(tempDir);
+	auto writeScript = [&tempDir](const std::string& name, const std::string& source) {
+		const auto path = tempDir / name;
+		std::ofstream file(path, std::ios::binary | std::ios::trunc);
+		file << source;
+		return path.generic_string();
+	};
+	const auto validPath = writeScript("valid.lua", "local value = GetPC()\n");
+	const auto failurePath = writeScript("failure.lua", "error('runtime failure')\n");
+	const auto breakPath = writeScript("break.lua", "Break()\n");
+	const auto loopPath = writeScript("loop.lua", "while true do end\n");
+	const auto missingPath = (tempDir / "missing.lua").generic_string();
+
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto request = [&hw](dev::Hardware::Req command, const nlohmann::json& data = nlohmann::json::object()) {
+		return *hw->Request(command, data);
+	};
+
+	auto added = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "missing"}, {"path", missingPath}, {"active", true}});
+	const auto scriptId = added["script"]["scriptId"].get<dev::Id>();
+	ASSERT_EQ(scriptId, 0);
+	ASSERT_EQ(added["updates"].get<uint32_t>(), uint32_t(1));
+	ASSERT_TRUE(added["script"]["active"].get<bool>());
+	ASSERT_EQ(added["script"]["compilation"]["status"].get<std::string>(), std::string("error"));
+
+	auto edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", scriptId}, {"name", "valid"}, {"path", validPath}, {"active", true}});
+	ASSERT_EQ(edited["updates"].get<uint32_t>(), uint32_t(2));
+	ASSERT_EQ(edited["script"]["compilation"]["status"].get<std::string>(), std::string("compiled"));
+	ASSERT_EQ(edited["script"]["runtime"]["status"].get<std::string>(), std::string("never_run"));
+
+	auto run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	ASSERT_TRUE(run["succeeded"].get<bool>());
+	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(3));
+	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(3));
+
+	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", scriptId}, {"name", "failure"}, {"path", failurePath}, {"active", true}});
+	ASSERT_EQ(edited["updates"].get<uint32_t>(), uint32_t(4));
+	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	ASSERT_TRUE(!run["succeeded"].get<bool>());
+	ASSERT_TRUE(run["error"].get<std::string>().find("runtime failure") != std::string::npos);
+	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(5));
+	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(5));
+
+	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", scriptId}, {"name", "loop"}, {"path", loopPath}, {"active", true}});
+	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	ASSERT_TRUE(!run["succeeded"].get<bool>());
+	ASSERT_TRUE(run["error"].get<std::string>().find("budget exceeded") != std::string::npos);
+
+	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", scriptId}, {"name", "break"}, {"path", breakPath}, {"active", true}});
+	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	ASSERT_TRUE(run["succeeded"].get<bool>());
+	ASSERT_TRUE(run["breakRequested"].get<bool>());
+	const auto stop = request(dev::Hardware::Req::GET_STOP_RECORD);
+	ASSERT_EQ(stop["reason"].get<std::string>(), std::string("script"));
+	ASSERT_EQ(stop["scriptId"].get<dev::Id>(), scriptId);
+
+	const auto beforeDisable = run["updates"].get<uint32_t>();
+	auto disabled = request(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE, {{"scriptId", scriptId}});
+	ASSERT_EQ(disabled["updates"].get<uint32_t>(), beforeDisable + 1);
+	disabled = request(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE, {{"scriptId", scriptId}});
+	ASSERT_EQ(disabled["updates"].get<uint32_t>(), beforeDisable + 1);
+	request(dev::Hardware::Req::DEBUG_SCRIPT_DEL, {{"scriptId", 999}});
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES)["updates"].get<uint32_t>(),
+		beforeDisable + 1);
+
+	request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "second"}, {"path", validPath}, {"active", false}});
+	const auto collection = request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL);
+	ASSERT_EQ(collection["scripts"].size(), size_t(2));
+	ASSERT_EQ(collection["scripts"][0]["scriptId"].get<dev::Id>(), 0);
+	ASSERT_EQ(collection["scripts"][1]["scriptId"].get<dev::Id>(), 1);
+
+	std::filesystem::remove_all(tempDir);
+}
+
 int main()
 {
 	test_hardware_command_ids();
@@ -1868,6 +1958,7 @@ int main()
 	test_hardware_statistics_and_mutations();
 	test_io_port_data_is_256_byte_binary();
 	test_trace_log_queries();
+	test_script_protocol();
 
 	std::cout << "IPC Tests: " << tests_passed << "/" << tests_run << " passed";
 	if (tests_failed > 0) {

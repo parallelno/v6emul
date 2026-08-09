@@ -91,6 +91,7 @@ namespace dev
 		void SetDebugPortOutCallback(IO::DebugPortOutFunc _func);
 		void RecordStop(const std::string& _reason,
 			const nlohmann::json& _trigger = nlohmann::json::object());
+		void StopForScript(Id scriptId);
 
 
 	private:
