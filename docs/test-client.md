@@ -63,6 +63,12 @@ Both success and error responses use `[4:payloadLen][16:V6RF header][body]`, so 
 
 The bundled client supports protocol version 2 only. It does not mark the TCP connection as usable and does not send frame, stats, or input requests when negotiation fails.
 
+The bundled graphical test client is intentionally limited to frame streaming,
+hardware statistics, and keyboard input. It does not provide a script editor or
+send Lua script commands. Script-capable clients must negotiate `scriptSchema = 1`,
+the required command IDs, and `scriptLimits` through `GET_SERVER_INFO`; see the
+[Lua scripts protocol](ipc-protocol.md#debug-lua-scripts).
+
 The main (UI) thread runs a 15ms WM_TIMER that repaints whenever a new frame is ready, using `StretchDIBits` with BI_BITFIELDS for zero-copy ABGR rendering.
 
 ### Stats Polling

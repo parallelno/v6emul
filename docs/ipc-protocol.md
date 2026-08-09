@@ -586,13 +586,73 @@ Clients must require `codePerfSchema = 1` and the relevant command IDs from `GET
 
 ### Debug: Lua Scripts
 
-| cmd | Name | Data |
-|-----|------|------|
-| 84 | `DEBUG_SCRIPT_ADD` | script definition |
-| 85 | `DEBUG_SCRIPT_DEL_ALL` | — |
-| 86 | `DEBUG_SCRIPT_DEL` | script id |
-| 87 | `DEBUG_SCRIPT_GET_ALL` | — |
-| 88 | `DEBUG_SCRIPT_GET_UPDATES` | — |
+Script schema 1 loads Lua source from server-local absolute paths. The legacy
+`{id, active, code, comment}` schema is not accepted.
+
+Client input contains `name` (non-empty UTF-8), `path` (absolute generic UTF-8
+path using `/`), and `active` (Boolean). Windows paths use `C:/...` or
+`//server/share/...`; POSIX paths use `/...`. The server lexically normalizes
+paths without resolving symlinks.
+
+Snapshots add the server-owned fields `scriptId`, `compilation`, and `runtime`:
+
+```json
+{
+  "scriptId": 12,
+  "name": "frame marker",
+  "path": "C:/scripts/frame-marker.lua",
+  "active": true,
+  "compilation": {"status": "compiled", "error": null},
+  "runtime": {"status": "never_run", "error": null}
+}
+```
+
+Compilation status is `compiled` or `error`. Runtime status is `never_run`,
+`succeeded`, or `error`. Activity is the requested scheduling state and is not
+rewritten after compilation or runtime errors. Scheduled execution requires an
+active, compiled script with no runtime error. Run Once ignores Activity and
+can retry a runtime-error script, but rejects a script that is not compiled.
+
+| cmd | Name | Data | Response |
+|-----|------|------|----------|
+| 84 | `DEBUG_SCRIPT_ADD` | complete input object | `{"updates", "script"}` |
+| 85 | `DEBUG_SCRIPT_DEL_ALL` | — | — |
+| 86 | `DEBUG_SCRIPT_DEL` | `{"scriptId": integer}` | — |
+| 87 | `DEBUG_SCRIPT_GET_ALL` | — | `{"updates", "scripts": [...]}` |
+| 88 | `DEBUG_SCRIPT_GET_UPDATES` | — | `{"updates": uint32}` |
+| 105 | `DEBUG_SCRIPT_EDIT` | complete input object plus `scriptId` | `{"updates", "script"}` |
+| 106 | `DEBUG_SCRIPT_COMPILE` | `{"scriptId": integer}` | `{"updates", "script"}` |
+| 107 | `DEBUG_SCRIPT_RUN_ONCE` | `{"scriptId": integer}` | run result |
+| 108 | `DEBUG_SCRIPT_DISABLE` | `{"scriptId": integer}` | `{"updates", "script"}` |
+| 109 | `DEBUG_SCRIPT_DISABLE_ALL` | — | `{"disabled": integer}` |
+
+ADD allocates monotonic IDs and returns a record even when file reading or Lua
+compilation fails. EDIT replaces every writable field while preserving the ID.
+A path change and COMPILE replace the Lua registry function and reset runtime
+state; a failure removes the stale function. DEL and DEL_ALL never modify source
+files. Missing IDs are no-ops for DEL and invalid requests for EDIT, COMPILE,
+RUN_ONCE, and DISABLE.
+
+Run Once returns `scriptId`, `succeeded`, `breakRequested`, `updates`, and the
+resulting `runtime`; failures also include `error`. `Break()` completes the Lua
+invocation and records a `script` stop with `scriptId`. Lua execution is bounded
+by the advertised instruction and elapsed-time limits. Process execution,
+native-library loading, and blocking Lua file/process APIs are unavailable.
+
+The wrapping `updates` value is a non-consuming collection revision. It advances
+once per command that changes observable state. GET_ALL returns that revision and
+an ascending-ID snapshot atomically.
+
+Clients must require `scriptSchema = 1` and each command they use from
+`GET_SERVER_INFO`. Script capabilities advertise path sources, explicit compile,
+Run Once, bulk disable, running-state behavior, and limits for names, paths,
+source, records, errors, instructions, and elapsed execution time.
+
+Records and the shared Lua environment survive reset, restart, ROM load, and TCP
+reconnect while the debugger exists. Debug detachment suspends scheduled
+execution and clears script-created UI output without changing records. Deleting
+a script releases its compiled function and owned UI items but does not undo
+arbitrary shared Lua globals.
 
 ### Debug: Recorder
 

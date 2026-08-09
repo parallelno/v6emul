@@ -20,6 +20,23 @@
 #include "ipc/commands.h"
 #include "ipc_request.h"
 
+namespace dev
+{
+	struct ScriptsTestAccess
+	{
+		static void SetNextScriptId(Scripts& scripts, Id nextScriptId)
+		{
+			scripts.m_nextScriptId = nextScriptId;
+			scripts.m_idsExhausted = false;
+		}
+
+		static void SetUpdates(Scripts& scripts, uint32_t updates)
+		{
+			scripts.m_updates = updates;
+		}
+	};
+}
+
 static int tests_run = 0;
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -675,6 +692,65 @@ static void test_request_validation()
 	ASSERT_EQ(std::get<dev::server::RequestError>(equalResult).details["field"].get<std::string>(),
 		std::string("addrEnd"));
 
+	const auto scriptAdd = static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_ADD);
+	const auto scriptEdit = static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_EDIT);
+#ifdef _WIN32
+	const std::string scriptPath = "C:/scripts/../test.lua";
+	const std::string normalizedScriptPath = "C:/test.lua";
+#else
+	const std::string scriptPath = "/scripts/../test.lua";
+	const std::string normalizedScriptPath = "/test.lua";
+#endif
+	const nlohmann::json scriptInput = {
+		{"name", "test"}, {"path", scriptPath}, {"active", true}
+	};
+	auto scriptResult = dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, scriptAdd}, {dev::ipc::FIELD_DATA, scriptInput}
+	});
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(scriptResult));
+	ASSERT_EQ(std::get<dev::server::IpcRequest>(scriptResult).data["path"].get<std::string>(),
+		normalizedScriptPath);
+	auto scriptWithId = scriptInput;
+	scriptWithId["scriptId"] = 7;
+	ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+		{dev::ipc::FIELD_CMD, scriptEdit}, {dev::ipc::FIELD_DATA, scriptWithId}
+	})));
+	auto assertInvalidScript = [&scriptInput, &assertInvalid, scriptAdd](const nlohmann::json& patch) {
+		auto invalidData = scriptInput;
+		invalidData.update(patch);
+		assertInvalid({{dev::ipc::FIELD_CMD, scriptAdd}, {dev::ipc::FIELD_DATA, invalidData}});
+	};
+	assertInvalidScript({{"name", ""}});
+	assertInvalidScript({{"name", std::string(dev::Scripts::MAX_NAME_BYTES + 1, 'x')}});
+	assertInvalidScript({{"name", std::string("\xC3\x28", 2)}});
+	assertInvalidScript({{"path", "relative/test.lua"}});
+	assertInvalidScript({{"path", "C:\\scripts\\test.lua"}});
+	assertInvalidScript({{"active", 1}});
+	assertInvalidScript({{"code", "print('legacy')"}});
+	assertInvalidScript({{"scriptId", 1}});
+	for (const auto command : {
+		dev::Hardware::Req::DEBUG_SCRIPT_DEL,
+		dev::Hardware::Req::DEBUG_SCRIPT_COMPILE,
+		dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
+		dev::Hardware::Req::DEBUG_SCRIPT_DISABLE}) {
+		const auto commandId = static_cast<int>(command);
+		ASSERT_TRUE(std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, commandId}, {dev::ipc::FIELD_DATA, {{"scriptId", 0}}}
+		})));
+		assertInvalid({{dev::ipc::FIELD_CMD, commandId},
+			{dev::ipc::FIELD_DATA, {{"scriptId", -1}}}});
+		assertInvalid({{dev::ipc::FIELD_CMD, commandId},
+			{dev::ipc::FIELD_DATA, {{"scriptId", 0}, {"extra", true}}}});
+	}
+	for (const auto command : {
+		dev::Hardware::Req::DEBUG_SCRIPT_DEL_ALL,
+		dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL,
+		dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES,
+		dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL}) {
+		assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(command)},
+			{dev::ipc::FIELD_DATA, {{"extra", true}}}});
+	}
+
 	const auto watchpointAdd = static_cast<int>(dev::Hardware::Req::DEBUG_WATCHPOINT_ADD);
 	const nlohmann::json watchpoint = {
 		{"globalAddr", 65536}, {"len", 4}, {"value", 32},
@@ -796,6 +872,12 @@ static void test_server_info()
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_CODE_PERF_EDIT)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_TRACE_LOG_WINDOW)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_ADD)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_EDIT)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
@@ -833,6 +915,28 @@ static void test_server_info()
 	ASSERT_EQ(info["capabilities"]["traceLogLimits"]["capacity"].get<size_t>(), dev::TraceLog::TRACE_LOG_SIZE);
 	ASSERT_EQ(info["capabilities"]["traceLogLimits"]["maxLines"].get<int>(), 512);
 	ASSERT_EQ(info["capabilities"]["traceLogLimits"]["maxPatternBytes"].get<int>(), 64);
+	ASSERT_EQ(info["capabilities"]["scriptSchema"].get<int>(), 1);
+	ASSERT_TRUE(info["capabilities"]["scriptServerAllocatedIds"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptPathSources"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptExplicitCompile"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptRunOnce"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptBulkDisable"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptMutationsWhileRunning"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptRunOnceWhileRunning"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxNameBytes"].get<size_t>(),
+		dev::Scripts::MAX_NAME_BYTES);
+	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxPathBytes"].get<size_t>(),
+		dev::Scripts::MAX_PATH_BYTES);
+	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxSourceBytes"].get<size_t>(),
+		dev::Scripts::MAX_SOURCE_BYTES);
+	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxRecords"].get<size_t>(),
+		dev::Scripts::MAX_RECORDS);
+	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxErrorBytes"].get<size_t>(),
+		dev::Scripts::MAX_ERROR_BYTES);
+	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxInstructionsPerRun"].get<int>(),
+		dev::Scripts::MAX_INSTRUCTIONS_PER_RUN);
+	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxExecutionMilliseconds"].get<int>(),
+		dev::Scripts::MAX_EXECUTION_MILLISECONDS);
 
 	auto response = dev::ipc::MakeResponse(info);
 	ASSERT_TRUE(dev::ipc::IsRawFrameServerCompatible(response));
@@ -1857,6 +1961,23 @@ static void test_script_protocol()
 	const auto failurePath = writeScript("failure.lua", "error('runtime failure')\n");
 	const auto breakPath = writeScript("break.lua", "Break()\n");
 	const auto loopPath = writeScript("loop.lua", "while true do end\n");
+	const auto syntaxPath = writeScript("syntax.lua", "function (\n");
+	const auto nulPath = writeScript("nul.lua", std::string("return 1\0return 2", 17));
+	const auto invalidUtf8Path = writeScript("invalid-utf8.lua", std::string("\xC3\x28", 2));
+	const auto globalsPath = writeScript("globals.lua",
+		"persistentValue = (persistentValue or 0) + 1\nDrawText(7, 'owned', 1, 2)\n");
+	const auto assertGlobalsPath = writeScript("assert-globals.lua",
+		"assert(persistentValue == 1)\n");
+	const auto sandboxPath = writeScript("sandbox.lua",
+		"assert(io == nil and os == nil and package == nil and require == nil and "
+		"loadfile == nil and dofile == nil)\n");
+	const auto mutablePath = writeScript("mutable.lua", "persistentCompile = 1\n");
+	const auto oversizedPath = tempDir / "oversized.lua";
+	{
+		std::ofstream file(oversizedPath, std::ios::binary | std::ios::trunc);
+		file.seekp(static_cast<std::streamoff>(dev::Scripts::MAX_SOURCE_BYTES));
+		file.put('x');
+	}
 	const auto missingPath = (tempDir / "missing.lua").generic_string();
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
@@ -1864,6 +1985,10 @@ static void test_script_protocol()
 	auto request = [&hw](dev::Hardware::Req command, const nlohmann::json& data = nlohmann::json::object()) {
 		return *hw->Request(command, data);
 	};
+	auto collection = request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL);
+	ASSERT_EQ(collection["updates"].get<uint32_t>(), uint32_t(0));
+	ASSERT_TRUE(collection["scripts"].is_array());
+	ASSERT_TRUE(collection["scripts"].empty());
 
 	auto added = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
 		{{"name", "missing"}, {"path", missingPath}, {"active", true}});
@@ -1872,28 +1997,45 @@ static void test_script_protocol()
 	ASSERT_EQ(added["updates"].get<uint32_t>(), uint32_t(1));
 	ASSERT_TRUE(added["script"]["active"].get<bool>());
 	ASSERT_EQ(added["script"]["compilation"]["status"].get<std::string>(), std::string("error"));
+	bool notCompiledRejected = false;
+	try {
+		request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	} catch (const dev::ScriptNotCompiled& error) {
+		notCompiledRejected = error.GetScriptId() == scriptId;
+	}
+	ASSERT_TRUE(notCompiledRejected);
 
 	auto edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
 		{{"scriptId", scriptId}, {"name", "valid"}, {"path", validPath}, {"active", true}});
 	ASSERT_EQ(edited["updates"].get<uint32_t>(), uint32_t(2));
 	ASSERT_EQ(edited["script"]["compilation"]["status"].get<std::string>(), std::string("compiled"));
 	ASSERT_EQ(edited["script"]["runtime"]["status"].get<std::string>(), std::string("never_run"));
+	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", scriptId}, {"name", "valid"}, {"path", validPath}, {"active", true}});
+	ASSERT_EQ(edited["updates"].get<uint32_t>(), uint32_t(2));
 
 	auto run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
 	ASSERT_TRUE(run["succeeded"].get<bool>());
 	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(3));
 	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
 	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(3));
+	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", scriptId}, {"name", "renamed"}, {"path", validPath}, {"active", false}});
+	ASSERT_EQ(edited["script"]["compilation"]["status"].get<std::string>(), std::string("compiled"));
+	ASSERT_EQ(edited["script"]["runtime"]["status"].get<std::string>(), std::string("succeeded"));
+	ASSERT_TRUE(!edited["script"]["active"].get<bool>());
+	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", scriptId}, {"name", "renamed"}, {"path", validPath}, {"active", true}});
+	ASSERT_EQ(edited["script"]["runtime"]["status"].get<std::string>(), std::string("succeeded"));
 
 	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
 		{{"scriptId", scriptId}, {"name", "failure"}, {"path", failurePath}, {"active", true}});
-	ASSERT_EQ(edited["updates"].get<uint32_t>(), uint32_t(4));
 	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
 	ASSERT_TRUE(!run["succeeded"].get<bool>());
 	ASSERT_TRUE(run["error"].get<std::string>().find("runtime failure") != std::string::npos);
-	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(5));
+	const auto failureUpdates = run["updates"].get<uint32_t>();
 	run = request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
-	ASSERT_EQ(run["updates"].get<uint32_t>(), uint32_t(5));
+	ASSERT_EQ(run["updates"].get<uint32_t>(), failureUpdates);
 
 	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
 		{{"scriptId", scriptId}, {"name", "loop"}, {"path", loopPath}, {"active", true}});
@@ -1919,14 +2061,157 @@ static void test_script_protocol()
 	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES)["updates"].get<uint32_t>(),
 		beforeDisable + 1);
 
-	request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
-		{{"name", "second"}, {"path", validPath}, {"active", false}});
-	const auto collection = request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL);
-	ASSERT_EQ(collection["scripts"].size(), size_t(2));
+	const auto second = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "duplicate"}, {"path", validPath}, {"active", true}});
+	const auto third = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "duplicate"}, {"path", validPath}, {"active", true}});
+	ASSERT_EQ(second["script"]["scriptId"].get<dev::Id>(), 1);
+	ASSERT_EQ(third["script"]["scriptId"].get<dev::Id>(), 2);
+	collection = request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL);
+	ASSERT_EQ(collection["scripts"].size(), size_t(3));
 	ASSERT_EQ(collection["scripts"][0]["scriptId"].get<dev::Id>(), 0);
 	ASSERT_EQ(collection["scripts"][1]["scriptId"].get<dev::Id>(), 1);
+	ASSERT_EQ(collection["scripts"][2]["scriptId"].get<dev::Id>(), 2);
+
+	const auto beforeDisableAll = collection["updates"].get<uint32_t>();
+	auto disableAll = request(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL);
+	ASSERT_EQ(disableAll["disabled"].get<size_t>(), size_t(2));
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES)["updates"].get<uint32_t>(),
+		beforeDisableAll + 1);
+	disableAll = request(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL);
+	ASSERT_EQ(disableAll["disabled"].get<size_t>(), size_t(0));
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES)["updates"].get<uint32_t>(),
+		beforeDisableAll + 1);
+
+	auto assertCompilationError = [&request](const std::string& name, const std::string& path) {
+		const auto result = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+			{{"name", name}, {"path", path}, {"active", true}});
+		ASSERT_EQ(result["script"]["compilation"]["status"].get<std::string>(),
+			std::string("error"));
+		ASSERT_TRUE(result["script"]["active"].get<bool>());
+	};
+	assertCompilationError("syntax", syntaxPath);
+	assertCompilationError("nul", nulPath);
+	assertCompilationError("invalid-utf8", invalidUtf8Path);
+	assertCompilationError("oversized", oversizedPath.generic_string());
+
+	const auto mutableScript = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "mutable"}, {"path", mutablePath}, {"active", true}});
+	const auto mutableId = mutableScript["script"]["scriptId"].get<dev::Id>();
+	request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", mutableId}});
+	writeScript("mutable.lua", "function (\n");
+	auto compiled = request(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE, {{"scriptId", mutableId}});
+	ASSERT_EQ(compiled["script"]["compilation"]["status"].get<std::string>(), std::string("error"));
+	ASSERT_TRUE(compiled["script"]["active"].get<bool>());
+	notCompiledRejected = false;
+	try {
+		request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", mutableId}});
+	} catch (const dev::ScriptNotCompiled&) {
+		notCompiledRejected = true;
+	}
+	ASSERT_TRUE(notCompiledRejected);
+	writeScript("mutable.lua", "persistentCompile = 2\n");
+	compiled = request(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE, {{"scriptId", mutableId}});
+	ASSERT_EQ(compiled["script"]["runtime"]["status"].get<std::string>(), std::string("never_run"));
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
+		{{"scriptId", mutableId}})["succeeded"].get<bool>());
+
+	const auto globals = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "globals"}, {"path", globalsPath}, {"active", false}});
+	const auto globalsId = globals["script"]["scriptId"].get<dev::Id>();
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
+		{{"scriptId", globalsId}})["succeeded"].get<bool>());
+	ASSERT_TRUE(!debugger->GetDebugData().GetScripts().GetUIItems().empty());
+	request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}});
+	request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", false}});
+	ASSERT_TRUE(debugger->GetDebugData().GetScripts().GetUIItems().empty());
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL)["scripts"].size(), size_t(9));
+	request(dev::Hardware::Req::RESET);
+	request(dev::Hardware::Req::RESTART);
+	request(dev::Hardware::Req::LOAD_ROM,
+		{{"data", std::vector<uint8_t>{0}}, {"addr", 0}, {"autorun", false}});
+	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
+		{{"scriptId", globalsId}, {"name", "assert-globals"},
+		 {"path", assertGlobalsPath}, {"active", false}});
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
+		{{"scriptId", globalsId}})["succeeded"].get<bool>());
+
+	const auto sandbox = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "sandbox"}, {"path", sandboxPath}, {"active", false}});
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::RUN));
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
+		{{"scriptId", sandbox["script"]["scriptId"]}})["succeeded"].get<bool>());
+	ASSERT_TRUE(hw->Request(dev::Hardware::Req::STOP));
+
+	const auto beforeDeleteAll = request(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES)["updates"].get<uint32_t>();
+	request(dev::Hardware::Req::DEBUG_SCRIPT_DEL_ALL);
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES)["updates"].get<uint32_t>(),
+		beforeDeleteAll + 1);
+	request(dev::Hardware::Req::DEBUG_SCRIPT_DEL_ALL);
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES)["updates"].get<uint32_t>(),
+		beforeDeleteAll + 1);
+	const auto afterClear = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "after-clear"}, {"path", validPath}, {"active", false}});
+	ASSERT_TRUE(afterClear["script"]["scriptId"].get<dev::Id>() > 2);
+	request(dev::Hardware::Req::DEBUG_SCRIPT_DEL, {{"scriptId", afterClear["script"]["scriptId"]}});
+	ASSERT_TRUE(debugger->GetDebugData().GetScripts().GetUIItems().empty());
+
+	debugger.reset();
+	hw.reset();
+	hw = std::make_unique<dev::Hardware>("", "", true);
+	debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL)["scripts"].empty());
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "new-lifetime"}, {"path", validPath}, {"active", false}})
+		["script"]["scriptId"].get<dev::Id>(), 0);
 
 	std::filesystem::remove_all(tempDir);
+}
+
+static void test_script_capacity()
+{
+	const auto path = std::filesystem::temp_directory_path() / "v6emul-script-capacity.lua";
+	{
+		std::ofstream file(path, std::ios::binary | std::ios::trunc);
+		file << "return true\n";
+	}
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	for (size_t index = 0; index < dev::Scripts::MAX_RECORDS; index++) {
+		const auto added = *hw->Request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+			{{"name", "capacity"}, {"path", path.generic_string()}, {"active", false}});
+		ASSERT_EQ(added["script"]["scriptId"].get<dev::Id>(), static_cast<dev::Id>(index));
+	}
+	bool capacityRejected = false;
+	try {
+		hw->Request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+			{{"name", "overflow"}, {"path", path.generic_string()}, {"active", false}});
+	} catch (const dev::ScriptAddError& error) {
+		capacityRejected = error.GetFailure() == dev::ScriptAddFailure::CAPACITY;
+	}
+	ASSERT_TRUE(capacityRejected);
+
+	dev::Scripts exhausted([](const std::string&) { return -1; });
+	const auto lastScriptId = (std::numeric_limits<dev::Id>::max)();
+	dev::ScriptsTestAccess::SetNextScriptId(exhausted, lastScriptId);
+	const nlohmann::json input = {
+		{"name", "last-id"}, {"path", path.generic_string()}, {"active", false}
+	};
+	ASSERT_EQ(exhausted.Add(input).scriptId, lastScriptId);
+	exhausted.Del(lastScriptId);
+	bool idExhaustionRejected = false;
+	try {
+		exhausted.Add(input);
+	} catch (const dev::ScriptAddError& error) {
+		idExhaustionRejected = error.GetFailure() == dev::ScriptAddFailure::ID_EXHAUSTED;
+	}
+	ASSERT_TRUE(idExhaustionRejected);
+
+	dev::Scripts wrapping([](const std::string&) { return -1; });
+	dev::ScriptsTestAccess::SetUpdates(wrapping, (std::numeric_limits<uint32_t>::max)());
+	wrapping.Add(input);
+	ASSERT_EQ(wrapping.GetUpdates(), uint32_t(0));
+	std::filesystem::remove(path);
 }
 
 int main()
@@ -1959,6 +2244,7 @@ int main()
 	test_io_port_data_is_256_byte_binary();
 	test_trace_log_queries();
 	test_script_protocol();
+	test_script_capacity();
 
 	std::cout << "IPC Tests: " << tests_passed << "/" << tests_run << " passed";
 	if (tests_failed > 0) {

@@ -45,6 +45,7 @@ dev::Debugger::Debugger(Hardware& _hardware, const int _recordFrames)
 dev::Debugger::~Debugger()
 {
 	m_hardware.Request(Hardware::Req::DEBUG_ATTACH, { {"data", false} });
+	m_hardware.AttachDebugFuncs(nullptr, nullptr);
 }
 
 // Hardware thread.

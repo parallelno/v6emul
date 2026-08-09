@@ -19,6 +19,7 @@ target_sources(ipc_tests PRIVATE ${CMAKE_SOURCE_DIR}/app/ipc_request.cpp)
 target_link_libraries(ipc_tests PRIVATE v6core v6ipc v6utils)
 target_include_directories(ipc_tests PRIVATE ${CMAKE_SOURCE_DIR}/app)
 add_test(NAME ipc_tests COMMAND ipc_tests)
+set_tests_properties(ipc_tests PROPERTIES TIMEOUT 30)
 
 add_executable(e2e_tests e2e_tests.cpp)
 target_link_libraries(e2e_tests PRIVATE v6core v6ipc v6utils)

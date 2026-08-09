@@ -19,6 +19,8 @@
 
 namespace dev
 {
+	struct ScriptsTestAccess;
+
 	class Scripts
 	{
 	public:
@@ -77,6 +79,8 @@ namespace dev
 		void ClearUIItems();
 
 	private:
+		friend struct ScriptsTestAccess;
+
 		void RegisterCppFunctions();
 		void CompileScript(Script& script);
 		auto RunScript(Script& script) -> RunResult;
