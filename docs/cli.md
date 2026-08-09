@@ -48,6 +48,8 @@ v6emul operates in one of three modes depending on the flags provided:
 | `--frame-mode <mode>` | string | `bordered` | Frame region returned by IPC: `full`, `bordered`, `borderless` |
 | `--tcp-port <port>` | int | `9876` | TCP port for the IPC server |
 
+Server mode leaves stdout unbuffered so redirected consumers receive server diagnostics and Lua `print()` output while emulation is running.
+
 ### Stop Conditions (Test Mode)
 
 | Flag | Type | Default | Description |

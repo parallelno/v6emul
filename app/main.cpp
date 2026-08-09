@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <format>
@@ -73,6 +74,7 @@ int main(int argc, char* argv[])
 	if (!args.IsRequirementSatisfied()) return 1;
 	if (!args.CheckUnknownArgs()) return 1;
 	if (args.HasFlag("help") || args.HasFlag("h")) return 0;
+	if (serve) std::setvbuf(stdout, nullptr, _IONBF, 0);
 
 	bool testMode = haltExit || runFrames > 0 || runCycles > 0;
 
