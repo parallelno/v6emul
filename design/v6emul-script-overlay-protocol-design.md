@@ -7,7 +7,7 @@
 
 Expose Lua-created text and rectangle overlays through IPC. Lua scripts create retained overlay state in the server. `DEBUG_SCRIPT_OVERLAY_GET` returns only overlays changed since the previous request and keys of removed overlays.
 
-The server does not rasterize overlays into the emulated framebuffer. It's outside this design.
+The server does not rasterize overlays into the emulated framebuffer. It's the client responsobilities and outside this design.
 
 ## 2. Server Model
 
@@ -54,7 +54,6 @@ ClearDrawItems()
   coordinateSpace = "frame",
   zIndex = 0,
   fontSize = 12,  -- DrawText only
-  lineWidth = 1   -- DrawRect only
 }
 ```
 
@@ -75,19 +74,18 @@ Unknown or inapplicable options are runtime errors.
 
 - Origin is the framebuffer bottom-left.
 - Positive X points right; positive Y points up.
-- Coordinates, dimensions, font size, and line width are framebuffer-pixel units.
+- Coordinates, dimensions, font size are framebuffer-pixel units.
 
 `normalized` uses fractions of the complete framebuffer:
 
 - Origin is the framebuffer bottom-left.
 - X and width are fractions of framebuffer width.
-- Y, height, font size, and line width are fractions of framebuffer height.
+- Y, height, font size are fractions of framebuffer height.
 
 ### Primitive rules
 
 - `DrawText` requires valid UTF-8 text without NUL bytes. `(x, y)` is the bottom-left of the text layout box. `fontSize` must be positive.
 - `DrawRect` and `DrawRectFilled` require non-negative width and height. `(x, y)` is the rectangle's bottom-left corner.
-- `DrawRect` requires a positive `lineWidth`.
 - `RemoveDrawItem` is an idempotent no-op for an unknown item.
 - `ClearDrawItems` removes all overlays owned by the executing script.
 
@@ -124,16 +122,9 @@ interface RectOverlay extends OverlayCommon {
   type: 'rect';
   width: number;
   height: number;
-  lineWidth: number;
 }
 
-interface RectFilledOverlay extends OverlayCommon {
-  type: 'rectFilled';
-  width: number;
-  height: number;
-}
-
-type ScriptOverlayItem = TextOverlay | RectOverlay | RectFilledOverlay;
+type ScriptOverlayItem = TextOverlay | RectOverlay;
 
 interface ScriptOverlayKey {
   scriptId: number;
@@ -194,7 +185,7 @@ Reject invalid item IDs, invalid UTF-8, NUL text, oversized text, unknown option
 | Edit setting `active: false` or Disable | Remove overlays owned by the script |
 | Delete | Remove overlays owned by the script |
 | Delete All | Remove all overlays |
-| Reset, restart, ROM load, or debug detach | Remove all overlays |
+| Debug detach | Remove all overlays |
 | Stop/start execution | Preserve overlays |
 | TCP disconnect/reconnect | Preserve overlays |
 | Debugger destruction | Destroy overlays |
