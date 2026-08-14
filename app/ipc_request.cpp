@@ -42,7 +42,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-				command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL);
+				command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -548,7 +548,8 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 	if ((command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DEL_ALL) ||
 		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL) ||
 		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES) ||
-		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL)) && !data.empty()) {
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)) && !data.empty()) {
 		return RequestError{"invalid_request", "command " + std::to_string(command) +
 			" does not accept data", {{"command", command}, {"field", data.items().begin().key()}}};
 	}
@@ -623,7 +624,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET); ++command) {
 		commands.push_back(command);
 	}
 
@@ -648,6 +649,17 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"scriptBulkDisable", true},
 			{"scriptMutationsWhileRunning", true},
 			{"scriptRunOnceWhileRunning", true},
+			{"scriptOverlaySchema", 1},
+			{"scriptOverlayRetained", true},
+			{"scriptOverlayConsumesUpdates", true},
+			{"scriptOverlayVectorScreenCoords", true},
+			{"scriptOverlayColorFormat", "RRGGBBAA"},
+			{"scriptOverlayLimits", {
+				{"maxItemsPerScript", dev::Scripts::MAX_OVERLAYS_PER_SCRIPT},
+				{"maxItemsTotal", dev::Scripts::MAX_OVERLAYS_TOTAL},
+				{"maxTextBytes", dev::Scripts::MAX_OVERLAY_TEXT_BYTES},
+				{"maxCoordinateMagnitude", dev::Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE}
+			}},
 			{"scriptLimits", {
 				{"maxNameBytes", dev::Scripts::MAX_NAME_BYTES},
 				{"maxPathBytes", dev::Scripts::MAX_PATH_BYTES},

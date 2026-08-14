@@ -746,7 +746,8 @@ static void test_request_validation()
 		dev::Hardware::Req::DEBUG_SCRIPT_DEL_ALL,
 		dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL,
 		dev::Hardware::Req::DEBUG_SCRIPT_GET_UPDATES,
-		dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL}) {
+		dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL,
+		dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET}) {
 		assertInvalid({{dev::ipc::FIELD_CMD, static_cast<int>(command)},
 			{dev::ipc::FIELD_DATA, {{"extra", true}}}});
 	}
@@ -878,6 +879,7 @@ static void test_server_info()
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE)));
 	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE_ALL)));
+	ASSERT_TRUE(hasCommand(static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)));
 	ASSERT_TRUE(info["capabilities"]["debugger"].get<bool>());
 	ASSERT_EQ(info["capabilities"]["rawFrameSchema"].get<int>(), 1);
 	ASSERT_EQ(info["capabilities"]["stackSampleSchema"].get<int>(), 1);
@@ -923,6 +925,19 @@ static void test_server_info()
 	ASSERT_TRUE(info["capabilities"]["scriptBulkDisable"].get<bool>());
 	ASSERT_TRUE(info["capabilities"]["scriptMutationsWhileRunning"].get<bool>());
 	ASSERT_TRUE(info["capabilities"]["scriptRunOnceWhileRunning"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["scriptOverlaySchema"].get<int>(), 1);
+	ASSERT_TRUE(info["capabilities"]["scriptOverlayRetained"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptOverlayConsumesUpdates"].get<bool>());
+	ASSERT_TRUE(info["capabilities"]["scriptOverlayVectorScreenCoords"].get<bool>());
+	ASSERT_EQ(info["capabilities"]["scriptOverlayColorFormat"].get<std::string>(), std::string("RRGGBBAA"));
+	ASSERT_EQ(info["capabilities"]["scriptOverlayLimits"]["maxItemsPerScript"].get<size_t>(),
+		dev::Scripts::MAX_OVERLAYS_PER_SCRIPT);
+	ASSERT_EQ(info["capabilities"]["scriptOverlayLimits"]["maxItemsTotal"].get<size_t>(),
+		dev::Scripts::MAX_OVERLAYS_TOTAL);
+	ASSERT_EQ(info["capabilities"]["scriptOverlayLimits"]["maxTextBytes"].get<size_t>(),
+		dev::Scripts::MAX_OVERLAY_TEXT_BYTES);
+	ASSERT_EQ(info["capabilities"]["scriptOverlayLimits"]["maxCoordinateMagnitude"].get<float>(),
+		dev::Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE);
 	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxNameBytes"].get<size_t>(),
 		dev::Scripts::MAX_NAME_BYTES);
 	ASSERT_EQ(info["capabilities"]["scriptLimits"]["maxPathBytes"].get<size_t>(),
@@ -1966,6 +1981,9 @@ static void test_script_protocol()
 	const auto invalidUtf8Path = writeScript("invalid-utf8.lua", std::string("\xC3\x28", 2));
 	const auto globalsPath = writeScript("globals.lua",
 		"persistentValue = (persistentValue or 0) + 1\nDrawText(7, 'owned', 1, 2)\n");
+	const auto overlayPath = writeScript("overlay.lua",
+		"DrawText(5, 'text', -1, 2, 0x01020304, false)\n"
+		"DrawRect(6, 3, 4, 5, 6, true, 0xAABBCCDD, false)\n");
 	const auto assertGlobalsPath = writeScript("assert-globals.lua",
 		"assert(persistentValue == 1)\n");
 	const auto sandboxPath = writeScript("sandbox.lua",
@@ -2116,20 +2134,44 @@ static void test_script_protocol()
 	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
 		{{"scriptId", mutableId}})["succeeded"].get<bool>());
 
+	const auto overlayScript = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+		{{"name", "overlay"}, {"path", overlayPath}, {"active", false}});
+	const auto overlayScriptId = overlayScript["script"]["scriptId"].get<dev::Id>();
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
+		{{"scriptId", overlayScriptId}})["succeeded"].get<bool>());
+	auto overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(2));
+	ASSERT_EQ(overlays[0]["scriptId"].get<dev::Id>(), overlayScriptId);
+	ASSERT_EQ(overlays[0]["itemId"].get<dev::Id>(), 5);
+	ASSERT_EQ(overlays[0]["type"].get<std::string>(), std::string("text"));
+	ASSERT_EQ(overlays[0]["text"].get<std::string>(), std::string("text"));
+	ASSERT_TRUE(!overlays[0]["vectorScreenCoords"].get<bool>());
+	ASSERT_EQ(overlays[1]["itemId"].get<dev::Id>(), 6);
+	ASSERT_EQ(overlays[1]["type"].get<std::string>(), std::string("rect"));
+	ASSERT_TRUE(overlays[1]["filled"].get<bool>());
+	ASSERT_EQ(overlays[1]["color"].get<uint32_t>(), uint32_t(0xAABBCCDD));
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].empty());
+
 	const auto globals = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
 		{{"name", "globals"}, {"path", globalsPath}, {"active", false}});
 	const auto globalsId = globals["script"]["scriptId"].get<dev::Id>();
 	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
 		{{"scriptId", globalsId}})["succeeded"].get<bool>());
-	ASSERT_TRUE(!debugger->GetDebugData().GetScripts().GetUIItems().empty());
+	overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(1));
+	ASSERT_EQ(overlays[0]["scriptId"].get<dev::Id>(), globalsId);
 	request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}});
 	request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", false}});
-	ASSERT_TRUE(debugger->GetDebugData().GetScripts().GetUIItems().empty());
-	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL)["scripts"].size(), size_t(9));
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].empty());
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL)["scripts"].size(), size_t(10));
 	request(dev::Hardware::Req::RESET);
 	request(dev::Hardware::Req::RESTART);
 	request(dev::Hardware::Req::LOAD_ROM,
 		{{"data", std::vector<uint8_t>{0}}, {"addr", 0}, {"autorun", false}});
+	hw->BeginSession();
+	overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(3));
+	ASSERT_EQ(overlays[2]["scriptId"].get<dev::Id>(), globalsId);
 	edited = request(dev::Hardware::Req::DEBUG_SCRIPT_EDIT,
 		{{"scriptId", globalsId}, {"name", "assert-globals"},
 		 {"path", assertGlobalsPath}, {"active", false}});
@@ -2154,7 +2196,7 @@ static void test_script_protocol()
 		{{"name", "after-clear"}, {"path", validPath}, {"active", false}});
 	ASSERT_TRUE(afterClear["script"]["scriptId"].get<dev::Id>() > 2);
 	request(dev::Hardware::Req::DEBUG_SCRIPT_DEL, {{"scriptId", afterClear["script"]["scriptId"]}});
-	ASSERT_TRUE(debugger->GetDebugData().GetScripts().GetUIItems().empty());
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].empty());
 
 	debugger.reset();
 	hw.reset();
@@ -2164,6 +2206,197 @@ static void test_script_protocol()
 	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
 		{{"name", "new-lifetime"}, {"path", validPath}, {"active", false}})
 		["script"]["scriptId"].get<dev::Id>(), 0);
+
+	std::filesystem::remove_all(tempDir);
+}
+
+static void test_script_overlay_protocol()
+{
+	const auto tempDir = std::filesystem::temp_directory_path() /
+		("v6emul-overlay-tests-" + std::to_string(
+			std::chrono::steady_clock::now().time_since_epoch().count()));
+	std::filesystem::create_directories(tempDir);
+	auto writeScript = [&tempDir](const std::string& name, const std::string& source) {
+		const auto path = tempDir / name;
+		std::ofstream file(path, std::ios::binary | std::ios::trunc);
+		file << source;
+		return path.generic_string();
+	};
+
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto request = [&hw](dev::Hardware::Req command,
+		const nlohmann::json& data = nlohmann::json::object()) {
+		return *hw->Request(command, data);
+	};
+	auto addScript = [&request](const std::string& name, const std::string& path) {
+		return request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+			{{"name", name}, {"path", path}, {"active", false}})["script"]["scriptId"].get<dev::Id>();
+	};
+	auto runScript = [&request](dev::Id scriptId) {
+		return request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE, {{"scriptId", scriptId}});
+	};
+
+	const auto primaryPath = writeScript("primary.lua",
+		"DrawText(9, 'default', 1, 2)\n"
+		"DrawText(2, 'partial', 3, 4, 0)\n"
+		"DrawRect(8, 5, 6, 7, 8)\n"
+		"DrawRect(3, 9, 10, 11, 12, true, 0xAABBCCDD, false)\n");
+	const auto primaryId = addScript("primary", primaryPath);
+	ASSERT_TRUE(runScript(primaryId)["succeeded"].get<bool>());
+	auto overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(4));
+	ASSERT_EQ(overlays[0]["itemId"].get<dev::Id>(), 2);
+	ASSERT_EQ(overlays[0]["color"].get<uint32_t>(), uint32_t(0));
+	ASSERT_TRUE(overlays[0]["vectorScreenCoords"].get<bool>());
+	ASSERT_EQ(overlays[1]["itemId"].get<dev::Id>(), 3);
+	ASSERT_EQ(overlays[1]["type"].get<std::string>(), std::string("rect"));
+	ASSERT_TRUE(overlays[1]["filled"].get<bool>());
+	ASSERT_TRUE(!overlays[1]["vectorScreenCoords"].get<bool>());
+	ASSERT_EQ(overlays[2]["itemId"].get<dev::Id>(), 8);
+	ASSERT_TRUE(!overlays[2]["filled"].get<bool>());
+	ASSERT_EQ(overlays[2]["color"].get<uint32_t>(), uint32_t(0xFFFFFFFF));
+	ASSERT_EQ(overlays[3]["itemId"].get<dev::Id>(), 9);
+	ASSERT_EQ(overlays[3]["type"].get<std::string>(), std::string("text"));
+	ASSERT_TRUE(runScript(primaryId)["succeeded"].get<bool>());
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].empty());
+
+	const auto secondPath = writeScript("second.lua", "DrawText(2, 'other script', 0, 0)\n");
+	const auto secondId = addScript("second", secondPath);
+	ASSERT_TRUE(runScript(secondId)["succeeded"].get<bool>());
+	overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(1));
+	ASSERT_EQ(overlays[0]["scriptId"].get<dev::Id>(), secondId);
+	ASSERT_EQ(overlays[0]["itemId"].get<dev::Id>(), 2);
+
+	writeScript("primary.lua", "DrawRect(2, -1, -2, 3, 4, false, 0, false)\n");
+	request(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE, {{"scriptId", primaryId}});
+	ASSERT_TRUE(runScript(primaryId)["succeeded"].get<bool>());
+	overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(1));
+	ASSERT_EQ(overlays[0]["type"].get<std::string>(), std::string("rect"));
+	ASSERT_EQ(overlays[0]["color"].get<uint32_t>(), uint32_t(0));
+	ASSERT_EQ(overlays[0]["x"].get<float>(), -1.0f);
+	ASSERT_EQ(overlays[0]["y"].get<float>(), -2.0f);
+
+	writeScript("primary.lua", "DrawText(2, 'replacement', 1, 1)\n");
+	request(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE, {{"scriptId", primaryId}});
+	ASSERT_TRUE(runScript(primaryId)["succeeded"].get<bool>());
+	overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(1));
+	ASSERT_EQ(overlays[0]["type"].get<std::string>(), std::string("text"));
+
+	writeScript("primary.lua", "function (\n");
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE, {{"scriptId", primaryId}})
+		["script"]["compilation"]["status"].get<std::string>(), std::string("error"));
+	hw->BeginSession();
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].size(), size_t(5));
+
+	writeScript("primary.lua", "error('overlay runtime failure')\n");
+	request(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE, {{"scriptId", primaryId}});
+	ASSERT_TRUE(!runScript(primaryId)["succeeded"].get<bool>());
+	hw->BeginSession();
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].size(), size_t(5));
+
+	writeScript("primary.lua", "while true do end\n");
+	request(dev::Hardware::Req::DEBUG_SCRIPT_COMPILE, {{"scriptId", primaryId}});
+	ASSERT_TRUE(!runScript(primaryId)["succeeded"].get<bool>());
+	hw->BeginSession();
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].size(), size_t(5));
+
+	const std::vector<std::string> invalidSources = {
+		"DrawText('1', 'x', 0, 0)\n",
+		"DrawText(1.5, 'x', 0, 0)\n",
+		"DrawText(1, 7, 0, 0)\n",
+		"DrawText(1, 'x', '0', 0)\n",
+		"DrawText(1, 'x', 0 / 0, 0)\n",
+		"DrawText(1, 'x', 1 / 0, 0)\n",
+		"DrawText(1, 'x', 1000000.01, 0)\n",
+		"DrawText(1, string.char(0), 0, 0)\n",
+		"DrawText(1, string.char(0xC3, 0x28), 0, 0)\n",
+		"DrawText(1, string.rep('x', 4097), 0, 0)\n",
+		"DrawText(1, 'x', 0, 0, 1.5)\n",
+		"DrawText(1, 'x', 0, 0, -1)\n",
+		"DrawText(1, 'x', 0, 0, 4294967296)\n",
+		"DrawText(1, 'x', 0, 0, 0xFFFFFFFF, 1)\n",
+		"DrawText(1, 'x', 0)\n",
+		"DrawRect(1, 0, 0, -1, 1)\n",
+		"DrawRect(1, 0, 0, 1, 1, 1)\n"
+	};
+	for (size_t index = 0; index < invalidSources.size(); index++) {
+		const auto name = "invalid-" + std::to_string(index) + ".lua";
+		const auto invalidId = addScript(name, writeScript(name, invalidSources[index]));
+		ASSERT_TRUE(!runScript(invalidId)["succeeded"].get<bool>());
+	}
+
+	request(dev::Hardware::Req::DEBUG_SCRIPT_DISABLE, {{"scriptId", primaryId}});
+	hw->BeginSession();
+	overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(1));
+	ASSERT_EQ(overlays[0]["scriptId"].get<dev::Id>(), secondId);
+	request(dev::Hardware::Req::DEBUG_SCRIPT_DEL, {{"scriptId", secondId}});
+	hw->BeginSession();
+	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].empty());
+
+	const auto runningPath = writeScript("running.lua", "DrawText(1, 'running', 0, 0)\n");
+	const auto runningId = addScript("running", runningPath);
+	ASSERT_TRUE(request(dev::Hardware::Req::RUN).is_null());
+	ASSERT_TRUE(runScript(runningId)["succeeded"].get<bool>());
+	overlays = request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"];
+	ASSERT_EQ(overlays.size(), size_t(1));
+	ASSERT_EQ(overlays[0]["scriptId"].get<dev::Id>(), runningId);
+	request(dev::Hardware::Req::STOP);
+	hw->BeginSession();
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].size(), size_t(1));
+
+	std::filesystem::remove_all(tempDir);
+}
+
+static void test_script_overlay_capacity()
+{
+	const auto tempDir = std::filesystem::temp_directory_path() /
+		("v6emul-overlay-capacity-" + std::to_string(
+			std::chrono::steady_clock::now().time_since_epoch().count()));
+	std::filesystem::create_directories(tempDir);
+	auto writeScript = [&tempDir](const std::string& name, const std::string& source) {
+		const auto path = tempDir / name;
+		std::ofstream file(path, std::ios::binary | std::ios::trunc);
+		file << source;
+		return path.generic_string();
+	};
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto request = [&hw](dev::Hardware::Req command,
+		const nlohmann::json& data = nlohmann::json::object()) {
+		return *hw->Request(command, data);
+	};
+	auto addAndRun = [&request](const std::string& name, const std::string& path) {
+		const auto added = request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
+			{{"name", name}, {"path", path}, {"active", false}});
+		return request(dev::Hardware::Req::DEBUG_SCRIPT_RUN_ONCE,
+			{{"scriptId", added["script"]["scriptId"]}});
+	};
+
+	const auto perScriptPath = writeScript("per-script.lua",
+		"for id = 0, 256 do DrawText(id, 'x', 0, 0) end\n");
+	const auto perScriptResult = addAndRun("per-script", perScriptPath);
+	ASSERT_TRUE(!perScriptResult["succeeded"].get<bool>());
+	ASSERT_TRUE(perScriptResult["error"].get<std::string>().find("per script") != std::string::npos);
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].size(),
+		dev::Scripts::MAX_OVERLAYS_PER_SCRIPT);
+	request(dev::Hardware::Req::DEBUG_SCRIPT_DEL_ALL);
+
+	const auto fullScriptPath = writeScript("full.lua",
+		"for id = 0, 255 do DrawText(id, 'x', 0, 0) end\n");
+	for (int index = 0; index < 4; index++) {
+		ASSERT_TRUE(addAndRun("full-" + std::to_string(index), fullScriptPath)["succeeded"].get<bool>());
+	}
+	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET)["overlays"].size(),
+		dev::Scripts::MAX_OVERLAYS_TOTAL);
+	const auto overflowPath = writeScript("overflow.lua", "DrawText(0, 'overflow', 0, 0)\n");
+	const auto totalResult = addAndRun("overflow", overflowPath);
+	ASSERT_TRUE(!totalResult["succeeded"].get<bool>());
+	ASSERT_TRUE(totalResult["error"].get<std::string>().find("total limit") != std::string::npos);
 
 	std::filesystem::remove_all(tempDir);
 }
@@ -2244,6 +2477,8 @@ int main()
 	test_io_port_data_is_256_byte_binary();
 	test_trace_log_queries();
 	test_script_protocol();
+	test_script_overlay_protocol();
+	test_script_overlay_capacity();
 	test_script_capacity();
 
 	std::cout << "IPC Tests: " << tests_passed << "/" << tests_run << " passed";

@@ -625,6 +625,7 @@ can retry a runtime-error script, but rejects a script that is not compiled.
 | 107 | `DEBUG_SCRIPT_RUN_ONCE` | `{"scriptId": integer}` | run result |
 | 108 | `DEBUG_SCRIPT_DISABLE` | `{"scriptId": integer}` | `{"updates", "script"}` |
 | 109 | `DEBUG_SCRIPT_DISABLE_ALL` | — | `{"disabled": integer}` |
+| 110 | `DEBUG_SCRIPT_OVERLAY_GET` | — | `{"overlays": [...]}` |
 
 ADD allocates monotonic IDs and returns a record even when file reading or Lua
 compilation fails. EDIT replaces every writable field while preserving the ID.
@@ -643,16 +644,35 @@ The wrapping `updates` value is a non-consuming collection revision. It advances
 once per command that changes observable state. GET_ALL returns that revision and
 an ascending-ID snapshot atomically.
 
+Scripts publish retained overlays with `DrawText(id, text, x, y, color?,
+vectorScreenCoords?)` and `DrawRect(id, x, y, width, height, filled?, color?,
+vectorScreenCoords?)`. IDs are scoped to the executing script. `color` is an
+unsigned `0xRRGGBBAA` value; omitted values default to opaque white, and
+`vectorScreenCoords` defaults to true. True uses the $512 \times 256$
+Vector-06C active area; false uses the complete $768 \times 312$ framebuffer.
+Negative X and Y coordinates are measured from the right and bottom edges.
+
+`DEBUG_SCRIPT_OVERLAY_GET` accepts no fields and returns only changed overlays,
+sorted by `scriptId` then `itemId`. Each item contains `scriptId`, `itemId`,
+`vectorScreenCoords`, `x`, `y`, and `color`, plus either
+`{"type":"text","text":...}` or
+`{"type":"rect","width":...,"height":...,"filled":...}`. Retrieving an
+overlay consumes its changed flag; an identical draw call does not publish it
+again. A newly connected client receives all retained overlays on its first poll.
+
 Clients must require `scriptSchema = 1` and each command they use from
 `GET_SERVER_INFO`. Script capabilities advertise path sources, explicit compile,
 Run Once, bulk disable, running-state behavior, and limits for names, paths,
-source, records, errors, instructions, and elapsed execution time.
+source, records, errors, instructions, and elapsed execution time. Overlay
+capabilities advertise `scriptOverlaySchema = 1`, retained consuming updates,
+coordinate selection, color format, and item/text/coordinate limits.
 
 Records and the shared Lua environment survive reset, restart, ROM load, and TCP
-reconnect while the debugger exists. Debug detachment suspends scheduled
-execution and clears script-created UI output without changing records. Deleting
-a script releases its compiled function and owned UI items but does not undo
-arbitrary shared Lua globals.
+reconnect while the debugger exists. Retained overlays also survive reset,
+restart, ROM load, debug detachment, and reconnect. Disabling or deleting a
+script removes its owned overlays; clients initiate those operations and update
+their local overlay state accordingly. Deleting a script releases its compiled
+function but does not undo arbitrary shared Lua globals.
 
 ### Debug: Recorder
 

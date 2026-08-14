@@ -232,6 +232,10 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		m_runStartCycles = m_sessionStartCycles;
 		m_lastRunCycles = 0;
 		m_sessionStartTime = std::chrono::steady_clock::now();
+		if (DebugReqHandling) {
+			DebugReqHandling(Req::INTERNAL_MARK_SCRIPT_OVERLAYS_UPDATED, {},
+				m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		}
 		break;
 
 	case Req::RUN:
@@ -625,10 +629,6 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 
 	case Req::DEBUG_ATTACH:
 		m_debugAttached = dataJ["data"];
-		if (!m_debugAttached && DebugReqHandling) {
-			DebugReqHandling(Req::INTERNAL_CLEAR_SCRIPT_UI, {},
-				m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
-		}
 		break;
 
 	case Req::LOAD_ROM:
@@ -691,8 +691,6 @@ void dev::Hardware::Reset()
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
-		DebugReqHandling(Req::INTERNAL_CLEAR_SCRIPT_UI, {},
-			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 	}
 }
 
@@ -706,8 +704,6 @@ void dev::Hardware::Restart()
 	m_memory.Restart();
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
-			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
-		DebugReqHandling(Req::INTERNAL_CLEAR_SCRIPT_UI, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 	}
 }

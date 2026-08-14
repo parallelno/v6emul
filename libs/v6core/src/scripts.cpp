@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -57,6 +58,26 @@ namespace
 	{
 		const char* message = lua_tostring(state, -1);
 		return BoundedError(message ? message : "Lua operation failed");
+	}
+
+	auto CheckStrictNumber(lua_State* state, int index, const char* functionName,
+		const char* parameterName) -> double
+	{
+		if (lua_type(state, index) != LUA_TNUMBER)
+			return luaL_error(state, "%s: %s must be a number", functionName, parameterName), 0.0;
+		const double value = lua_tonumber(state, index);
+		if (!std::isfinite(value))
+			return luaL_error(state, "%s: %s must be finite", functionName, parameterName), 0.0;
+		return value;
+	}
+
+	auto CheckStrictInteger(lua_State* state, int index, const char* functionName,
+		const char* parameterName, double maximum) -> uint64_t
+	{
+		const double value = CheckStrictNumber(state, index, functionName, parameterName);
+		if (value < 0 || value > maximum || std::trunc(value) != value)
+			return luaL_error(state, "%s: %s must be an integer in range", functionName, parameterName), 0;
+		return static_cast<uint64_t>(value);
 	}
 }
 
@@ -239,45 +260,36 @@ void dev::Scripts::RegisterCppFunctions()
 	// DrawText
 	lua_CFunction drawTextFunc = [](lua_State* state) -> int
 	{
-		auto paramNum = lua_gettop(state);
-		uint32_t color = 0xFFFFFFFF;
-		bool vectorScreenCoords = true;
-
+		const auto paramNum = lua_gettop(state);
 		if (paramNum < 4 || paramNum > 6) {
-			luaL_error(state,
-				"DrawText: wrong number of parameters: "
-				"(id, text, x, y, <color=0xFFFFFFFF>, "
-				"<vectorScreenCoords=true>)");
-			return 0;
+			return luaL_error(state, "DrawText: expected (id, text, x, y, <color=0xFFFFFFFF>, <vectorScreenCoords=true>)");
 		}
-
-		int id = luaL_checkinteger(state, 1);
-		const char* textCStr = luaL_checkstring(state, 2);
-		float x = luaL_checknumber(state, 3);
-		float y = luaL_checknumber(state, 4);
+		const auto id = CheckStrictInteger(state, 1, "DrawText", "id", std::numeric_limits<int32_t>::max());
+		if (lua_type(state, 2) != LUA_TSTRING) return luaL_error(state, "DrawText: text must be a string");
+		size_t textLength = 0;
+		const char* text = lua_tolstring(state, 2, &textLength);
+		if (textLength > Scripts::MAX_OVERLAY_TEXT_BYTES) return luaL_error(state, "DrawText: text exceeds maxTextBytes");
+		const std::string textValue(text, textLength);
+		if (textValue.find('\0') != std::string::npos || !IsValidUtf8(textValue))
+			return luaL_error(state, "DrawText: text must be valid UTF-8 without NUL bytes within maxTextBytes");
+		const double xValue = CheckStrictNumber(state, 3, "DrawText", "x");
+		const double yValue = CheckStrictNumber(state, 4, "DrawText", "y");
+		if (std::abs(xValue) > Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE || std::abs(yValue) > Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE)
+			return luaL_error(state, "DrawText: coordinates are out of range");
+		const float x = static_cast<float>(xValue);
+		const float y = static_cast<float>(yValue);
+		uint32_t color = 0xFFFFFFFF;
 		if (paramNum >= 5) {
-			color = static_cast<uint32_t>(luaL_checkinteger(state, 5));
+			color = static_cast<uint32_t>(CheckStrictInteger(state, 5, "DrawText", "color",
+				std::numeric_limits<uint32_t>::max()));
 		}
+		bool vectorScreenCoords = true;
 		if (paramNum >= 6) {
-			vectorScreenCoords = lua_toboolean(state, 6);
+			if (!lua_isboolean(state, 6)) return luaL_error(state, "DrawText: vectorScreenCoords must be boolean");
+			vectorScreenCoords = lua_toboolean(state, 6) != 0;
 		}
-
-		if (!textCStr) {
-			luaL_error(state, "DrawText: text argument must be a string");
-		}
-
-		auto* scriptsP = static_cast<Scripts*>(
-			lua_touserdata(state, lua_upvalueindex(1)));
-		if (scriptsP) {
-			auto& uiReqs = scriptsP->m_uiReqs;
-			auto& lock = scriptsP->m_uiReqsMutex;
-
-			std::lock_guard<std::mutex> lockGuard(lock);
-			uiReqs[id] = UIItem{
-				Scripts::UIType::TEXT,
-				x, y, 0, 0,
-				textCStr, color, vectorScreenCoords, scriptsP->m_currentScriptId};
-		}
+		auto* scripts = static_cast<Scripts*>(lua_touserdata(state, lua_upvalueindex(1)));
+		if (scripts) scripts->StoreOverlay(static_cast<Id>(id), {Scripts::OverlayType::TEXT, x, y, 0, 0, textValue, color, vectorScreenCoords, false, true});
 		return 0;
 	};
 	lua_pushlightuserdata(m_luaState, (void*)(this));
@@ -287,92 +299,44 @@ void dev::Scripts::RegisterCppFunctions()
 	// DrawRect
 	lua_CFunction drawRectFunc = [](lua_State* state) -> int
 	{
-		auto paramNum = lua_gettop(state);
+		const auto paramNum = lua_gettop(state);
+		if (paramNum < 5 || paramNum > 8) {
+			return luaL_error(state, "DrawRect: expected (id, x, y, width, height, <filled=false>, <color=0xFFFFFFFF>, <vectorScreenCoords=true>)");
+		}
+		const auto id = CheckStrictInteger(state, 1, "DrawRect", "id", std::numeric_limits<int32_t>::max());
+		const double xValue = CheckStrictNumber(state, 2, "DrawRect", "x");
+		const double yValue = CheckStrictNumber(state, 3, "DrawRect", "y");
+		const double widthValue = CheckStrictNumber(state, 4, "DrawRect", "width");
+		const double heightValue = CheckStrictNumber(state, 5, "DrawRect", "height");
+		if (std::abs(xValue) > Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE || std::abs(yValue) > Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE ||
+			widthValue < 0 || heightValue < 0 || widthValue > Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE || heightValue > Scripts::MAX_OVERLAY_COORDINATE_MAGNITUDE)
+			return luaL_error(state, "DrawRect: coordinates or dimensions are out of range");
+		const float x = static_cast<float>(xValue);
+		const float y = static_cast<float>(yValue);
+		const float width = static_cast<float>(widthValue);
+		const float height = static_cast<float>(heightValue);
+		bool filled = false;
+		if (paramNum >= 6) {
+			if (!lua_isboolean(state, 6)) return luaL_error(state, "DrawRect: filled must be boolean");
+			filled = lua_toboolean(state, 6) != 0;
+		}
 		uint32_t color = 0xFFFFFFFF;
 		bool vectorScreenCoords = true;
-
-		if (paramNum < 5 || paramNum > 7) {
-			luaL_error(state,
-				"DrawRect: wrong number of parameters: "
-				"(id, x, y, width, height, "
-				"<color=0xFFFFFFFF>, <vectorScreenCoords=true>)");
-			return 0;
-		}
-
-		int id = luaL_checkinteger(state, 1);
-		float x = luaL_checknumber(state, 2);
-		float y = luaL_checknumber(state, 3);
-		float width = luaL_checknumber(state, 4);
-		float height = luaL_checknumber(state, 5);
-		if (paramNum >= 6) {
-			color = static_cast<uint32_t>(luaL_checkinteger(state, 6));
-		}
 		if (paramNum >= 7) {
-			vectorScreenCoords = lua_toboolean(state, 7);
+			color = static_cast<uint32_t>(CheckStrictInteger(state, 7, "DrawRect", "color",
+				std::numeric_limits<uint32_t>::max()));
 		}
-
-		auto* scriptsP = static_cast<Scripts*>(
-			lua_touserdata(state, lua_upvalueindex(1)));
-
-		if (scriptsP) {
-			auto& uiReqs = scriptsP->m_uiReqs;
-			auto& lock = scriptsP->m_uiReqsMutex;
-
-			std::lock_guard<std::mutex> lockGuard(lock);
-			uiReqs[id] = UIItem{
-				Scripts::UIType::RECT,
-				x, y, width, height,
-				"", color, vectorScreenCoords, scriptsP->m_currentScriptId};
+		if (paramNum >= 8) {
+			if (!lua_isboolean(state, 8)) return luaL_error(state, "DrawRect: vectorScreenCoords must be boolean");
+			vectorScreenCoords = lua_toboolean(state, 8) != 0;
 		}
+		auto* scripts = static_cast<Scripts*>(lua_touserdata(state, lua_upvalueindex(1)));
+		if (scripts) scripts->StoreOverlay(static_cast<Id>(id), {Scripts::OverlayType::RECT, x, y, width, height, "", color, vectorScreenCoords, filled, true});
 		return 0;
 	};
 	lua_pushlightuserdata(m_luaState, (void*)(this));
 	lua_pushcclosure(m_luaState, drawRectFunc, 1);
 	lua_setglobal(m_luaState, "DrawRect");
-
-	// DrawRectFilled
-	lua_CFunction drawRectFilledFunc = [](lua_State* state) -> int
-	{
-		auto paramNum = lua_gettop(state);
-		uint32_t color = 0xFFFFFFFF;
-		bool vectorScreenCoords = true;
-
-		if (paramNum < 5 || paramNum > 7) {
-			luaL_error(state,
-				"DrawRectFilled: wrong number of parameters: "
-				"(id, x, y, width, height, "
-				"<color=0xFFFFFFFF>, <vectorScreenCoords=true>)");
-			return 0;
-		}
-
-		int id = luaL_checkinteger(state, 1);
-		float x = luaL_checknumber(state, 2);
-		float y = luaL_checknumber(state, 3);
-		float width = luaL_checknumber(state, 4);
-		float height = luaL_checknumber(state, 5);
-		if (paramNum >= 6) {
-			color = static_cast<uint32_t>(luaL_checkinteger(state, 6));
-		}
-		if (paramNum >= 7) {
-			vectorScreenCoords = lua_toboolean(state, 7);
-		}
-
-		auto* scriptsP = static_cast<Scripts*>(lua_touserdata(state, lua_upvalueindex(1)));
-		if (scriptsP) {
-			auto& uiReqs = scriptsP->m_uiReqs;
-			auto& lock = scriptsP->m_uiReqsMutex;
-
-			std::lock_guard<std::mutex> lockGuard(lock);
-			uiReqs[id] = UIItem{
-				Scripts::UIType::RECT_FILLED,
-				x, y, width, height, "", color, vectorScreenCoords,
-				scriptsP->m_currentScriptId};
-		}
-		return 0;
-	};
-	lua_pushlightuserdata(m_luaState, (void*)(this));
-	lua_pushcclosure(m_luaState, drawRectFilledFunc, 1);
-	lua_setglobal(m_luaState, "DrawRectFilled");
 
 }
 
@@ -460,16 +424,17 @@ auto dev::Scripts::Edit(Id scriptId, const nlohmann::json& input) -> const Scrip
 	const auto name = input.at("name").get<std::string>();
 	const auto path = input.at("path").get<std::string>();
 	const auto active = input.at("active").get<bool>();
-	if (script.name == name && script.path == path && script.active == active) return script;
+	if (script.name == name && script.path == path && script.active == active) {
+		if (!active) RemoveOverlays(scriptId);
+		return script;
+	}
 
 	const bool pathChanged = script.path != path;
-	const bool becameInactive = script.active && !active;
 	script.name = name;
 	script.path = path;
 	script.active = active;
 	if (pathChanged) CompileScript(script);
-	if (becameInactive || script.compilationStatus != ScriptCompilationStatus::COMPILED ||
-		script.runtimeStatus == ScriptRuntimeStatus::ERROR) RemoveUIItems(scriptId);
+	if (!active) RemoveOverlays(scriptId);
 	m_updates++;
 	return script;
 }
@@ -478,7 +443,6 @@ auto dev::Scripts::Compile(Id scriptId) -> const Script&
 {
 	auto& script = FindRequired(scriptId);
 	CompileScript(script);
-	if (script.compilationStatus != ScriptCompilationStatus::COMPILED) RemoveUIItems(scriptId);
 	m_updates++;
 	return script;
 }
@@ -531,7 +495,6 @@ auto dev::Scripts::RunScript(Script& script) -> RunResult
 		script.runtimeStatus = ScriptRuntimeStatus::ERROR;
 		script.runtimeError = LuaError(m_luaState);
 		lua_pop(m_luaState, 1);
-		RemoveUIItems(script.scriptId);
 	}
 	if (m_break) m_breakScriptId = script.scriptId;
 	if (previousStatus != script.runtimeStatus || previousError != script.runtimeError) m_updates++;
@@ -549,9 +512,9 @@ auto dev::Scripts::RunOnce(Id scriptId, const CpuI8080::State* cpuState,
 auto dev::Scripts::Disable(Id scriptId) -> const Script&
 {
 	auto& script = FindRequired(scriptId);
+	RemoveOverlays(scriptId);
 	if (script.active) {
 		script.active = false;
-		RemoveUIItems(scriptId);
 		m_updates++;
 	}
 	return script;
@@ -561,9 +524,9 @@ auto dev::Scripts::DisableAll() -> size_t
 {
 	size_t disabled = 0;
 	for (auto& [id, script] : m_scripts) {
+		RemoveOverlays(id);
 		if (!script.active) continue;
 		script.active = false;
-		RemoveUIItems(id);
 		disabled++;
 	}
 	if (disabled > 0) m_updates++;
@@ -575,7 +538,7 @@ void dev::Scripts::Del(Id scriptId)
 	auto script = m_scripts.find(scriptId);
 	if (script == m_scripts.end()) return;
 	ReleaseReference(script->second);
-	RemoveUIItems(scriptId);
+	RemoveOverlays(scriptId);
 	m_scripts.erase(script);
 	m_updates++;
 }
@@ -585,7 +548,7 @@ void dev::Scripts::Clear()
 	if (m_scripts.empty()) return;
 	for (auto& [id, script] : m_scripts) ReleaseReference(script);
 	m_scripts.clear();
-	ClearUIItems();
+	ClearOverlays();
 	m_updates++;
 }
 
@@ -623,22 +586,62 @@ auto dev::Scripts::Get(Id scriptId) const -> const Script&
 	return script->second;
 }
 
-auto dev::Scripts::GetUIItems() const -> UIReqs
+void dev::Scripts::StoreOverlay(Id itemId, OverlayItem item)
 {
-	std::lock_guard<std::mutex> lock(m_uiReqsMutex);
-	return m_uiReqs;
+	if (m_currentScriptId < 0) return;
+	auto& scriptOverlays = m_overlays[m_currentScriptId];
+	auto existing = scriptOverlays.find(itemId);
+	if (existing == scriptOverlays.end()) {
+		if (scriptOverlays.size() >= MAX_OVERLAYS_PER_SCRIPT) luaL_error(m_luaState, "Overlay limit per script exceeded");
+		size_t total = 0;
+		for (const auto& [scriptId, overlays] : m_overlays) total += overlays.size();
+		if (total >= MAX_OVERLAYS_TOTAL) luaL_error(m_luaState, "Overlay total limit exceeded");
+		scriptOverlays.emplace(itemId, std::move(item));
+		return;
+	}
+	const bool changed = existing->second.type != item.type || existing->second.x != item.x || existing->second.y != item.y ||
+		existing->second.width != item.width || existing->second.height != item.height || existing->second.text != item.text ||
+		existing->second.color != item.color || existing->second.vectorScreenCoords != item.vectorScreenCoords || existing->second.filled != item.filled;
+	if (!changed) return;
+	item.updated = true;
+	existing->second = std::move(item);
 }
 
-void dev::Scripts::RemoveUIItems(Id scriptId)
+auto dev::Scripts::GetOverlayUpdatesJson() -> nlohmann::json
 {
-	std::lock_guard<std::mutex> lock(m_uiReqsMutex);
-	std::erase_if(m_uiReqs, [scriptId](const auto& item) {
-		return item.second.ownerScriptId == scriptId;
-	});
+	nlohmann::json overlays = nlohmann::json::array();
+	std::vector<Id> scriptIds;
+	for (const auto& [scriptId, items] : m_overlays) scriptIds.push_back(scriptId);
+	std::sort(scriptIds.begin(), scriptIds.end());
+	for (const auto scriptId : scriptIds) {
+		auto& items = m_overlays.at(scriptId);
+		std::vector<Id> itemIds;
+		for (const auto& [itemId, item] : items) if (item.updated) itemIds.push_back(itemId);
+		std::sort(itemIds.begin(), itemIds.end());
+		for (const auto itemId : itemIds) {
+			auto& item = items.at(itemId);
+			nlohmann::json overlay = {{"scriptId", scriptId}, {"itemId", itemId}, {"vectorScreenCoords", item.vectorScreenCoords}, {"x", item.x}, {"y", item.y}, {"color", item.color}};
+			if (item.type == OverlayType::TEXT) overlay["type"] = "text", overlay["text"] = item.text;
+			else overlay["type"] = "rect", overlay["width"] = item.width, overlay["height"] = item.height, overlay["filled"] = item.filled;
+			item.updated = false;
+			overlays.push_back(std::move(overlay));
+		}
+	}
+	return {{"overlays", std::move(overlays)}};
 }
 
-void dev::Scripts::ClearUIItems()
+void dev::Scripts::MarkAllOverlaysUpdated()
 {
-	std::lock_guard<std::mutex> lock(m_uiReqsMutex);
-	m_uiReqs.clear();
+	for (auto& [scriptId, items] : m_overlays)
+		for (auto& [itemId, item] : items) item.updated = true;
+}
+
+void dev::Scripts::RemoveOverlays(Id scriptId)
+{
+	m_overlays.erase(scriptId);
+}
+
+void dev::Scripts::ClearOverlays()
+{
+	m_overlays.clear();
 }

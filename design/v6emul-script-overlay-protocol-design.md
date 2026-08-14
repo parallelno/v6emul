@@ -1,6 +1,6 @@
 # v6emul Script Overlay Protocol Design
 
-**Status:** Proposed
+**Status:** Implemented
 **Date:** 2026-08-09
 
 ## 1. Scope
@@ -186,14 +186,18 @@ Cover:
 
 ## 8. Implementation Checklist
 
-- [ ] Reserve and advertise `DEBUG_SCRIPT_OVERLAY_GET = 110`.
-- [ ] Add overlay wire types, limits, and capability fields.
-- [ ] Replace `UIItem`, `UIReqs`, `UIType`, `vectorScreenCoords`, and the UI mutex.
-- [ ] Store overlays by `(scriptId, itemId)` with internal `updated` flags.
-- [ ] Implement strict positional `DrawText` and `DrawRect` callbacks with trailing optional arguments.
-- [ ] Publish one rectangle type with a `filled` field.
-- [ ] Return and consume only updated overlays.
-- [ ] Integrate lifecycle cleanup and reconnect initialization.
-- [ ] Add the server tests from Section 7.
-- [ ] Update public protocol and architecture documentation.
-- [ ] Run focused tests, the full CTest suite, and sanitizer validation.
+- [x] Reserve and advertise `DEBUG_SCRIPT_OVERLAY_GET = 110`.
+- [x] Add overlay wire types, limits, and capability fields.
+- [x] Replace `UIItem`, `UIReqs`, `UIType`, `vectorScreenCoords`, and the UI mutex.
+- [x] Store overlays by `(scriptId, itemId)` with internal `updated` flags.
+- [x] Implement strict positional `DrawText` and `DrawRect` callbacks with trailing optional arguments.
+- [x] Publish one rectangle type with a `filled` field.
+- [x] Return and consume only updated overlays.
+- [x] Integrate lifecycle cleanup and reconnect initialization.
+- [x] Add the server tests from Section 7.
+- [x] Update public protocol and architecture documentation.
+- [x] Run focused tests, the full CTest suite, and sanitizer validation.
+
+Verification on 2026-08-14: the focused IPC suite passed 1,694 assertions,
+the Release CTest suite passed 10/10 tests, and the focused IPC suite passed
+under MSVC AddressSanitizer.

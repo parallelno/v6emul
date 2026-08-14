@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -31,11 +30,15 @@ namespace dev
 		static constexpr size_t MAX_ERROR_BYTES = 4096;
 		static constexpr int MAX_INSTRUCTIONS_PER_RUN = 100000;
 		static constexpr int MAX_EXECUTION_MILLISECONDS = 25;
+		static constexpr size_t MAX_OVERLAYS_PER_SCRIPT = 256;
+		static constexpr size_t MAX_OVERLAYS_TOTAL = 1024;
+		static constexpr size_t MAX_OVERLAY_TEXT_BYTES = 4096;
+		static constexpr float MAX_OVERLAY_COORDINATE_MAGNITUDE = 1000000.0f;
 
-		enum UIType { NONE = 0, TEXT, RECT, RECT_FILLED };
+		enum class OverlayType { TEXT, RECT };
 
-		struct UIItem {
-			UIType type = NONE;
+		struct OverlayItem {
+			OverlayType type = OverlayType::TEXT;
 			float x = 0;
 			float y = 0;
 			float width = 0;
@@ -43,7 +46,8 @@ namespace dev
 			std::string text;
 			uint32_t color = 0xFFFFFFFF;
 			bool vectorScreenCoords = true;
-			Id ownerScriptId = -1;
+			bool filled = false;
+			bool updated = true;
 		};
 
 		struct RunResult {
@@ -51,7 +55,8 @@ namespace dev
 			bool breakRequested;
 		};
 
-		using UIReqs = std::unordered_map<Id, UIItem>;
+		using OverlayItems = std::unordered_map<Id, OverlayItem>;
+		using ScriptOverlays = std::unordered_map<Id, OverlayItems>;
 		using ScriptMap = std::unordered_map<Id, Script>;
 		using LabelAddrFunc = std::function<int(const std::string&)>;
 
@@ -73,10 +78,10 @@ namespace dev
 			const IO::State* ioState, const Display::State* displayState) -> bool;
 		auto Get(Id scriptId) const -> const Script&;
 		auto GetAllJson() const -> nlohmann::json;
+		auto GetOverlayUpdatesJson() -> nlohmann::json;
+		void MarkAllOverlaysUpdated();
 		auto GetUpdates() const -> uint32_t { return m_updates; }
 		auto GetBreakScriptId() const -> Id { return m_breakScriptId; }
-		auto GetUIItems() const -> UIReqs;
-		void ClearUIItems();
 
 	private:
 		friend struct ScriptsTestAccess;
@@ -86,7 +91,9 @@ namespace dev
 		auto RunScript(Script& script) -> RunResult;
 		auto FindRequired(Id scriptId) -> Script&;
 		void ReleaseReference(Script& script);
-		void RemoveUIItems(Id scriptId);
+		void StoreOverlay(Id itemId, OverlayItem item);
+		void RemoveOverlays(Id scriptId);
+		void ClearOverlays();
 		void SetExecutionState(const CpuI8080::State* cpuState,
 			const Memory::State* memState, const IO::State* ioState,
 			const Display::State* displayState);
@@ -109,8 +116,7 @@ namespace dev
 		int m_instructionCount = 0;
 		std::chrono::steady_clock::time_point m_executionDeadline;
 
-		UIReqs m_uiReqs;
-		mutable std::mutex m_uiReqsMutex;
+		ScriptOverlays m_overlays;
 		LabelAddrFunc m_getLabelAddrFunc;
 	};
 }

@@ -472,8 +472,8 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 	case Hardware::Req::INTERNAL_INVALIDATE_TRACE_LOG_FILTER:
 		m_traceLog.InvalidateQuery();
 		break;
-	case Hardware::Req::INTERNAL_CLEAR_SCRIPT_UI:
-		m_debugData.GetScripts().ClearUIItems();
+	case Hardware::Req::INTERNAL_MARK_SCRIPT_OVERLAYS_UPDATED:
+		m_debugData.GetScripts().MarkAllOverlaysUpdated();
 		break;
 
 	case Hardware::Req::DEBUG_CODE_PERF_DEL_ALL:
@@ -581,6 +581,9 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 
 	case Hardware::Req::DEBUG_SCRIPT_GET_ALL:
 		out = m_debugData.GetScripts().GetAllJson();
+		break;
+	case Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET:
+		out = m_debugData.GetScripts().GetOverlayUpdatesJson();
 		break;
 
 	//////////////////
