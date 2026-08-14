@@ -59,7 +59,7 @@ Trailing parameters are optional and must be supplied in order.
 When `vectorScreenCoords` is true, coordinates use the Vector-06C active screen. When false, they use the complete framebuffer.
 
 - Non-negative `x` is measured from the left; negative `x` is measured from the right.
-- Non-negative `y` is measured from the top; negative `y` is measured from the bottom.
+- Non-negative `y` is measured from the bottom; negative `y` is measured from the top.
 - Width and height use the selected coordinate space's pixel units.
 
 ### Primitive rules
