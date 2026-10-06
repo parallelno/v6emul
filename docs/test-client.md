@@ -16,7 +16,7 @@ Output: `build/release/tools/test_client/Release/test_client.exe`
 ## Usage
 
 ```
-test_client.exe [--port 9876]
+test_client [--port 9876]
 ```
 
 Start the emulator first, then launch the test client. It auto-connects to `127.0.0.1` on the specified port (default 9876) and reconnects automatically if the connection drops.

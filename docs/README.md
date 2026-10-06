@@ -11,6 +11,7 @@
 | [IPC Protocol](ipc-protocol.md) | Wire format, message framing, command reference |
 | [Architecture](architecture.md) | Thread model, library hierarchy, code structure |
 | [Test Client](test-client.md) | Win32 test client for frame display and debugging |
+| [Publishing](publishing.md) | CI workflow, versioning, and how releases are published to GitHub |
 
 ## Quick Start
 

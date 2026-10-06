@@ -5,12 +5,12 @@
 ## Quick Start
 
 ```bash
-./build/release/app/v6emul --serve            # start IPC server mode
-./build/release/app/v6emul --version          # print build version
-./build/release/app/v6emul --help             # show CLI help
-./build/release/app/v6emul --boot-rom res/boot/boot.bin --serve
-./build/release/app/v6emul --fdd game.fdd --boot-rom res/boot/boot.bin --fdd-autoboot --serve
-./build/release/app/v6emul --rom test.rom --halt-exit --dump-cpu
+.v6emul --serve            # start IPC server mode
+.v6emul --version          # print build version
+.v6emul --help             # show CLI help
+.v6emul --rom res/boot/boot.bin --serve
+.v6emul --fdd game.fdd --boot-rom res/boot/boot.bin --fdd-autoboot --serve
+.v6emul --rom test.rom --halt-exit --dump-cpu
 ```
 
 [![CI](https://github.com/parallelno/v6emul/actions/workflows/ci.yml/badge.svg)](https://github.com/parallelno/v6emul/actions/workflows/ci.yml)
@@ -42,6 +42,7 @@ Full reference is in the [`docs/`](docs/README.md) folder:
 - [Test Client](docs/test-client.md) — running and using the sample client
 - [Building](docs/building.md) — prerequisites, presets, and test commands
 - [IPC Protocol](docs/ipc-protocol.md) — wire format, commands, and framing
+- [Publishing](docs/publishing.md) — CI workflow, versioning, and GitHub releases
 
 ### Build from source
 
