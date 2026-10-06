@@ -46,14 +46,20 @@ Full reference is in the [`docs/`](docs/README.md) folder:
 
 ### Build from source
 
-Requires CMake 3.21+, a C++20 compiler, Git, and Python 3.8+ for the ASM unit test runner.
+Requires CMake 3.21+, a C++20 compiler, Git, and Python 3.8+ for the ASM unit test
+runner (the project uses a local `.venv`, created with [`uv`](https://docs.astral.sh/uv/)
+or `python -m venv`).
 
 ```bash
 git clone https://github.com/parallelno/v6emul.git
 cd v6emul
+uv venv .venv              # local Python for the ASM test runner (auto-detected by CMake)
 cmake --preset release
 cmake --build --preset release
 ```
+
+On Windows or Linux/macOS you can instead run the helper script, which bootstraps
+`.venv` for you: `./scripts/build.ps1` or `./scripts/build.sh`.
 
 ## Tests
 

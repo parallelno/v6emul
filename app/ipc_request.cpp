@@ -116,7 +116,8 @@ namespace
 #else
 		if (!wirePath.starts_with('/') || wirePath.starts_with("//")) return std::nullopt;
 #endif
-		const auto normalized = std::filesystem::u8path(wirePath).lexically_normal().generic_u8string();
+		const auto normalized = std::filesystem::path(
+			reinterpret_cast<const char8_t*>(wirePath.c_str())).lexically_normal().generic_u8string();
 		return std::string(reinterpret_cast<const char*>(normalized.data()), normalized.size());
 	}
 

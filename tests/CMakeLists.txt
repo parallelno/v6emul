@@ -55,7 +55,25 @@ add_test(
         -P ${CMAKE_CURRENT_SOURCE_DIR}/run_golden.cmake
 )
 
-# ASM unit tests (assemble + run + validate via Python)
+# ASM unit tests (assemble + run + validate via Python).
+# Prefer the project-local virtual environment (created with `uv venv .venv`
+# or `python -m venv .venv`) so no system-wide Python installation is needed.
+if(WIN32)
+    set(_V6EMUL_VENV_PYTHON "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
+else()
+    set(_V6EMUL_VENV_PYTHON "${CMAKE_SOURCE_DIR}/.venv/bin/python3")
+    if(NOT EXISTS "${_V6EMUL_VENV_PYTHON}")
+        set(_V6EMUL_VENV_PYTHON "${CMAKE_SOURCE_DIR}/.venv/bin/python")
+    endif()
+endif()
+if(EXISTS "${_V6EMUL_VENV_PYTHON}")
+    set(Python3_EXECUTABLE "${_V6EMUL_VENV_PYTHON}" CACHE FILEPATH "Python interpreter from the project .venv" FORCE)
+    message(STATUS "Using project virtual environment Python: ${Python3_EXECUTABLE}")
+elseif(DEFINED Python3_EXECUTABLE AND NOT EXISTS "${Python3_EXECUTABLE}")
+    # Drop a stale cached path (for example a previously used .venv that was removed).
+    unset(Python3_EXECUTABLE CACHE)
+endif()
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 if(WIN32)

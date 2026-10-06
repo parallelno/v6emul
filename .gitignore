@@ -43,3 +43,8 @@ Desktop.ini
 
 # Dependencies / reference code
 temp/
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.py[cod]

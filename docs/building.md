@@ -27,9 +27,25 @@ platform compiler and build tools listed above must already be installed.
 
 ### Python (test runner)
 
-The CMake project discovers Python while configuring the tests, so **Python 3.8+**
-must be available even when only building the emulator. The ASM test runner uses
-only the standard library; no third-party Python packages are needed.
+The CMake project discovers Python while configuring the tests, so a Python
+**3.8+** interpreter must be reachable. To avoid depending on a system-wide
+installation, the project uses a local virtual environment in `.venv/`:
+
+```bash
+# Create the environment with uv (recommended; it can also install a managed Python)
+uv venv .venv
+
+# ...or fall back to an existing Python 3.8+
+python -m venv .venv
+```
+
+CMake automatically prefers `.venv` when it exists (it looks for
+`.venv/Scripts/python.exe` on Windows and `.venv/bin/python3` on Linux/macOS), so
+later `cmake --preset ...` runs need no extra flags. When `.venv` is absent, CMake
+falls back to any Python interpreter on `PATH`.
+
+The ASM test runner uses only the standard library; no third-party Python packages
+are needed, so the environment requires no `requirements.txt`.
 
 ## Configure & Build
 
@@ -53,19 +69,43 @@ generates the native build files.
 git clone https://github.com/parallelno/v6emul.git
 cd v6emul
 
-# 2. Configure. This creates build/release; it may take time on the first run.
+# 2. Create the local Python virtual environment used by the ASM test runner.
+#    CMake discovers it automatically during the next step.
+uv venv .venv
+
+# 3. Configure. This creates build/release; it may take time on the first run.
 cmake --preset release
 
-# 3. Compile the emulator, test programs, and Windows test client.
+# 4. Compile the emulator, test programs, and Windows test client.
 cmake --build --preset release
 
-# 4. Run the complete CTest suite.
+# 5. Run the complete CTest suite.
 ctest --test-dir build/release --build-config Release --output-on-failure
 ```
 
 Configuration must succeed before the build command is run. If a build directory
 contains stale or incomplete generated files, remove that preset's directory
-(for example, `build/release/`) and repeat steps 2-4.
+(for example, `build/release/`) and repeat steps 3-5.
+
+### Convenience Build Scripts
+
+`scripts/build.ps1` (Windows) and `scripts/build.sh` (Linux/macOS) bootstrap the
+`.venv` if it is missing and then run the configure/build workflow. Both scripts
+put the environment's Python on `PATH` for the duration of the run.
+
+```powershell
+# Windows PowerShell
+./scripts/build.ps1                  # configure + build (release)
+./scripts/build.ps1 -Preset ci -Test # configure + build + test (ci)
+./scripts/build.ps1 -Clean           # wipe the build dir first
+```
+
+```bash
+# Linux / macOS
+./scripts/build.sh                   # configure + build (release)
+./scripts/build.sh -p ci -t          # configure + build + test (ci)
+./scripts/build.sh -c                # wipe the build dir first
+```
 
 ### Debug Build
 
@@ -170,6 +210,9 @@ See [PLAN_unit_test_suite_2026-03-31.md](../PLAN_unit_test_suite_2026-03-31.md) 
 ```
 CMakeLists.txt          Root build. Dependencies, sub-projects, testing.
 CMakePresets.json       Configure/build presets (debug, release, ci).
+scripts/
+  build.ps1             Windows helper: bootstrap .venv + configure/build/test.
+  build.sh              Linux/macOS helper: bootstrap .venv + configure/build/test.
 app/
   CMakeLists.txt        v6emul executable, links v6core + v6ipc + v6utils.
   main.cpp              CLI entry point.
