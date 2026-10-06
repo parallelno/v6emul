@@ -121,8 +121,10 @@ bool dev::Breakpoint::CheckStatus(
 		return op >= data.structured.value;
 	case dev::Condition::NOT_EQU:
 		return op != data.structured.value;
+	default:
+		// ANY is handled above; INVALID/COUNT fall through to no match.
+		return false;
 	}
-	return false;
 }
 
 void dev::Breakpoint::Print() const

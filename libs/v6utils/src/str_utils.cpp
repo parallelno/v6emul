@@ -1,6 +1,4 @@
 #include <sstream>
-#include <locale>
-#include <codecvt>
 #include <cstdint>
 #include <algorithm>
 #include <fstream>
@@ -61,10 +59,38 @@ auto dev::StrToStrW(const std::string& _s)
 auto dev::StrWToStr(const std::wstring& _ws)
 -> const std::string
 {
-	//const std::string s(_ws.begin(), _ws.end());
-	//return s;
-	std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-	return converter.to_bytes(_ws);
+	// Encode the wide string as UTF-8 without <codecvt> (deprecated in C++17 and
+	// removed from some standard libraries). wchar_t is 16-bit on Windows and
+	// 32-bit elsewhere; both are handled for code points up to U+10FFFF.
+	std::string result;
+	result.reserve(_ws.size());
+	for (const wchar_t _wc : _ws)
+	{
+		const uint32_t cp = static_cast<uint32_t>(_wc);
+		if (cp < 0x80)
+		{
+			result.push_back(static_cast<char>(cp));
+		}
+		else if (cp < 0x800)
+		{
+			result.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+			result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		}
+		else if (cp < 0x10000)
+		{
+			result.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+			result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		}
+		else
+		{
+			result.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+			result.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+			result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		}
+	}
+	return result;
 }
 /*
 auto dev::Utf8ToStrW(const std::string& _s)

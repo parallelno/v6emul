@@ -354,7 +354,7 @@ uint8_t dev::Fdc1793::Write(const Port _reg, uint8_t _val)
 		case 0xF0: // WRITE-TRACK, i.e., format
 			// the full protocol is not implemented (involves parsing lead-in & lead-out);
 			// it only sets the track data to 0xE5
-			if (m_ptr = Seek(0, m_regs[1], 1))
+			if ((m_ptr = Seek(0, m_regs[1], 1)))
 			{
 				memset(m_ptr, 0xE5, FDD_SECTOR_LEN * FDD_SECTORS_PER_TRACK);
 				m_disk->updated = true;

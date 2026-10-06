@@ -11,6 +11,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ── Build configuration ────────────────────────────────────────────────
+# Single-config generators (Make, Ninja) use CMAKE_BUILD_TYPE to select the
+# build type; multi-config generators (Visual Studio, Xcode) choose the
+# configuration at build time. CMakePresets.json supplies CMAKE_BUILD_TYPE for
+# both, so reference it here to avoid CMake reporting it as an unused variable
+# on multi-config generators.
+if(CMAKE_CONFIGURATION_TYPES)
+    message(STATUS "Build type: ${CMAKE_BUILD_TYPE} (multi-config: ${CMAKE_CONFIGURATION_TYPES})")
+else()
+    message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+endif()
+
 set(V6EMUL_VERSION_STRING "$ENV{V6EMUL_VERSION}")
 
 if(NOT V6EMUL_VERSION_STRING)
