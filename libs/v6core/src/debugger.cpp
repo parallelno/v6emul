@@ -264,7 +264,7 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 			Breakpoint::GetStatus(_reqDataJ["status"]),
 			_reqDataJ["autoDelete"],
 			Breakpoint::GetOperand(_reqDataJ["operand"]),
-			ParseConditionName(_reqDataJ["condition"]),
+			ParseConditionName(_reqDataJ["condition"].get<std::string>()),
 			_reqDataJ["value"],
 			_reqDataJ.value("counter", uint64_t{1}) };
 		m_debugData.GetBreakpoints().Add({ std::move(bpData), _reqDataJ["comment"] });
@@ -330,7 +330,7 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 			-1,
 			Watchpoint::GetAccess(_reqDataJ["access"]),
 			_reqDataJ["globalAddr"],
-				ParseConditionName(_reqDataJ["condition"]),
+				ParseConditionName(_reqDataJ["condition"].get<std::string>()),
 			_reqDataJ["value"],
 			Watchpoint::GetType(_reqDataJ["type"]),
 			_reqDataJ["len"],
@@ -344,7 +344,7 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 			_reqDataJ["id"],
 			Watchpoint::GetAccess(_reqDataJ["access"]),
 			_reqDataJ["globalAddr"],
-			ParseConditionName(_reqDataJ["condition"]),
+			ParseConditionName(_reqDataJ["condition"].get<std::string>()),
 			_reqDataJ["value"],
 			Watchpoint::GetType(_reqDataJ["type"]),
 			_reqDataJ["len"],

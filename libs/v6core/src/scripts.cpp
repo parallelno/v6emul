@@ -362,7 +362,8 @@ void dev::Scripts::CompileScript(Script& script)
 	script.runtimeError.clear();
 
 	std::error_code errorCode;
-	const auto nativePath = std::filesystem::u8path(script.path);
+	const auto nativePath = std::filesystem::path(
+		reinterpret_cast<const char8_t*>(script.path.c_str()));
 	if (!std::filesystem::is_regular_file(nativePath, errorCode)) {
 		script.compilationStatus = ScriptCompilationStatus::ERROR;
 		script.compilationError = "Script source is missing, unreadable, or not a regular file";
