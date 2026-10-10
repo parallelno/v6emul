@@ -1,3 +1,4 @@
+#include <climits>
 #include <cstdarg>
 #include <fstream>
 #include <iostream>
