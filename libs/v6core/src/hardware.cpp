@@ -198,6 +198,13 @@ void dev::Hardware::Execution()
 			ReqHandling();
 		}
 	}
+
+	// The emulation thread stops serving the request queue as soon as EXIT has
+	// been processed, but late callers on other threads (e.g., ~Debugger on the
+	// main thread after RunServerMode() has returned) can still push requests.
+	// Keep draining the queue for a short grace period so those callers get a
+	// response instead of blocking forever in Request()'s m_reqRes.pop().
+	while (ReqHandling(m_exitGracePeriod)) {}
 }
 
 // IPC Interface Thread. It return when the request fulfilled
@@ -213,10 +220,10 @@ auto dev::Hardware::Request(const Req _req, const nlohmann::json& _dataJ)
 }
 
 // internal thread
-void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> _waitTime)
+bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> _waitTime)
 {
 	auto result = m_reqs.pop(_waitTime);
-	if (!result) return;
+	if (!result) return false;
 
 	const auto& [req, dataJ] = *result;
 
@@ -667,17 +674,18 @@ void dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 			out = DebugReqHandling(req, dataJ, m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 		} else {
 			m_reqRes.emplace({{}, nullptr, false});
-			return;
+			return true;
 		}
 	}
 
 	}
 	catch (...) {
 		m_reqRes.emplace({{}, std::current_exception(), false});
-		return;
+		return true;
 	}
 
 	m_reqRes.emplace({std::move(out), nullptr, true});
+	return true;
 }
 
 void dev::Hardware::Reset()

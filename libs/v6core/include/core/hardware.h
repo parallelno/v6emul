@@ -121,6 +121,9 @@ namespace dev
 		TQueue <RequestResult> m_reqRes;				// request's result sent back
 
 		static constexpr std::chrono::microseconds m_reqHandlingTime = 1ms;
+		// How long the execution thread keeps serving late requests after EXIT
+		// before terminating (see Hardware::Execution()).
+		static constexpr std::chrono::milliseconds m_exitGracePeriod = 250ms;
 		ExecSpeed m_execSpeed = ExecSpeed::NORMAL;
 		double m_actualSpeedPercent = 100.0;
 		std::chrono::microseconds m_execDelays[static_cast<int>(ExecSpeed::LEN)] = {
@@ -138,7 +141,7 @@ namespace dev
 		void Execution();
 		bool ExecuteInstruction();
 		void ExecuteFrameNoBreaks();
-		void ReqHandling(
+		bool ReqHandling(
 			const std::chrono::duration<int64_t, std::nano> _waitTime = -1ns);
 		auto RunHeadless(const nlohmann::json& _dataJ) -> nlohmann::json;
 		void Reset();

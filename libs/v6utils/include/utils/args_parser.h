@@ -4,6 +4,7 @@
 #include <set>
 #include <string>
 #include <any>
+#include <vector>
 
 namespace dev
 {
@@ -28,6 +29,9 @@ namespace dev
 
 		std::map <ArgName, std::string> m_args;
 		std::set<std::string> m_knownArgs;
+		// positional (no leading '-') arguments; collected only to report them
+		// as unsupported in CheckUnknownArgs()
+		std::vector<std::string> m_positional;
 		std::string m_help;
 		bool m_requirementSatisfied = true;
 

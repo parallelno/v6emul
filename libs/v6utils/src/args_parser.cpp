@@ -29,6 +29,10 @@ dev::ArgsParser::ArgsParser(int& _argc, char** _argv,
 
 			m_args.emplace(paramName, value);
 		}
+		else
+		{
+			m_positional.push_back(_argv[i]);
+		}
 	}
 }
 
@@ -143,6 +147,11 @@ bool dev::ArgsParser::CheckUnknownArgs() const
 			std::cerr << std::format("Error: unknown argument: --{}\n", name);
 			allKnown = false;
 		}
+	}
+	// positional arguments (without the leading '-') are not supported
+	for (const auto& positional : m_positional) {
+		std::cerr << std::format("Error: unsupported argument: {}\n", positional);
+		allKnown = false;
 	}
 	if (!allKnown) {
 		std::cout << std::format("\n{}\n", m_help);
