@@ -27,6 +27,23 @@ namespace
 		V6EMUL_VERSION "\n" \
 		"(c) Aleksandr Fedotovskikh <mailforfriend@gmail.com>"
 
+	// Preset names accepted by --boot-rom in addition to an explicit file path.
+	constexpr const char* BOOT_ROM_DEFAULT1 = "default1";
+	constexpr const char* BOOT_ROM_DEFAULT2 = "default2";
+	constexpr const char* BOOT_ROM_DEFAULT1_PATH = "res/boot/boots.bin";
+	constexpr const char* BOOT_ROM_DEFAULT2_PATH = "res/boot/boot.bin";
+
+	auto ResolveBootRomPath(std::string bootRomPath) -> std::string
+	{
+		if (bootRomPath == BOOT_ROM_DEFAULT1) {
+			return BOOT_ROM_DEFAULT1_PATH;
+		}
+		if (bootRomPath == BOOT_ROM_DEFAULT2) {
+			return BOOT_ROM_DEFAULT2_PATH;
+		}
+		return bootRomPath;
+	}
+
 	auto CanLoadStartupFile(const std::string& path) -> bool
 	{
 		if (path.empty()) {
@@ -53,7 +70,9 @@ int main(int argc, char* argv[])
 	}
 
 	auto romPath = args.GetString("rom", "Path to a ROM file to load", false, "");
-	auto bootRomPath = args.GetString("boot-rom", "Path to a boot ROM file to map at address 0 on startup/reset", false, "");
+	auto bootRomPath = ResolveBootRomPath(args.GetString("boot-rom",
+		"Boot ROM to map at address 0 on startup/reset: a file path, or preset default1 (res/boot/boots.bin) / default2 (res/boot/boot.bin)",
+		false, ""));
 	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
 	auto fddPath = args.GetString("fdd", "Path to a floppy disk image to mount", false, "");
 	auto fddDrive = args.GetInt("fdd-drive", "FDD drive index (0-3, default: 0)", false, 0);

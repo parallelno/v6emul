@@ -23,11 +23,14 @@ cmake --build --preset release
 # Run with IPC server
 v6emul --serve
 
-# Run with a boot ROM mapped at startup
-v6emul --boot-rom res/boot/boot.bin --serve
+# Run with a boot ROM mapped at startup (32 KB "boot" v4.5 loader)
+v6emul --boot-rom default2 --serve
+
+# Run with the 2 KB "boots" v3.0 loader
+v6emul --boot-rom default1 --serve
 
 # Mount a floppy disk and autoboot
-v6emul --boot-rom res/boot/boot.bin --fdd game.fdd --fdd-autoboot --serve
+v6emul --boot-rom default2 --fdd game.fdd --fdd-autoboot --serve
 
 # Run with a ROM
 v6emul --rom game.rom --load-addr 0x100 --serve

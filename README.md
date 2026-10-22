@@ -8,8 +8,9 @@
 .v6emul --serve            # start IPC server mode
 .v6emul --version          # print build version
 .v6emul --help             # show CLI help
-.v6emul --rom res/boot/boot.bin --serve
-.v6emul --fdd game.fdd --boot-rom res/boot/boot.bin --fdd-autoboot --serve
+.v6emul --boot-rom default2 --serve                     # 32 KB "boot" v4.5 loader
+.v6emul --boot-rom default1 --serve                     # 2 KB "boots" v3.0 loader
+.v6emul --fdd game.fdd --boot-rom default2 --fdd-autoboot --serve
 .v6emul --rom test.rom --halt-exit --dump-cpu
 ```
 
