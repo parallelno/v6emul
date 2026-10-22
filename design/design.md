@@ -24,7 +24,7 @@ A **C++ CLI executable** (`v6emul`) that emulates the Vector-06C (Soviet PC with
 v6emul [OPTIONS] [ROM_FILE]
 ```
 
-- **ROM_FILE** (optional positional): path to a ROM file to load into emulator memory at `--load-addr` (default `0x0000`).
+- **ROM_FILE** (optional positional): path to a ROM file to load into emulator memory at `--load-addr` (default `0x0100`).
 - **No ROM**: start with empty memory, accept external control commands over IPC.
 - **No stop condition** (`--halt-exit`, `--run-frames`, `--run-cycles`): start TCP IPC server and run indefinitely.
 - **With stop condition**: run headlessly, print test output to stdout, exit.
@@ -49,7 +49,7 @@ v6emul [OPTIONS] [ROM_FILE]
 
 | Flag | Purpose |
 |------|---------|
-| `--load-addr <ADDR>` | ROM load address in hex (default: `0x0000`) |
+| `--load-addr <ADDR>` | ROM load address in hex (default: `0x0100`) |
 | `--tcp-port <PORT>` | TCP port for IPC server (default: `9876`) |
 | `--speed <SPEED>` | Execution speed: `1%`, `20%`, `50%`, `100%`, `200%`, `max` |
 | `--log-level <LEVEL>` | Log verbosity: `error`, `warn`, `info`, `debug`, `trace` |

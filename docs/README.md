@@ -32,8 +32,8 @@ v6emul --boot-rom default1 --serve
 # Mount a floppy disk and autoboot
 v6emul --boot-rom default2 --fdd game.fdd --fdd-autoboot --serve
 
-# Run with a ROM
-v6emul --rom game.rom --load-addr 0x100 --serve
+# Run with a ROM (loads at the default address 0x100)
+v6emul --rom game.rom --serve
 
 # Headless test mode
 v6emul --rom test.rom --halt-exit --dump-cpu

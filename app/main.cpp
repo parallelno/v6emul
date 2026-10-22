@@ -73,7 +73,7 @@ int main(int argc, char* argv[])
 	auto bootRomPath = ResolveBootRomPath(args.GetString("boot-rom",
 		"Boot ROM to map at address 0 on startup/reset: a file path, or preset default1 (res/boot/boots.bin) / default2 (res/boot/boot.bin)",
 		false, ""));
-	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0)", false, 0);
+	auto loadAddr = args.GetInt("load-addr", "ROM load address in hex (default: 0x100)", false, 0x100);
 	auto fddPath = args.GetString("fdd", "Path to a floppy disk image to mount", false, "");
 	auto fddDrive = args.GetInt("fdd-drive", "FDD drive index (0-3, default: 0)", false, 0);
 	bool fddAutoboot = args.HasFlag("fdd-autoboot", "Reset and boot from the mounted floppy disk");

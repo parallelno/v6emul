@@ -32,7 +32,7 @@ add_test(
     NAME golden_test_port
     COMMAND ${CMAKE_COMMAND}
         -DCMD=$<TARGET_FILE:v6emul>
-        "-DARGS=--rom;${GOLDEN_DIR}/test_port.bin;--halt-exit"
+        "-DARGS=--rom;${GOLDEN_DIR}/test_port.bin;--load-addr;0;--halt-exit"
         -DEXPECTED=${GOLDEN_DIR}/test_port.expected
         -P ${CMAKE_CURRENT_SOURCE_DIR}/run_golden.cmake
 )
@@ -41,7 +41,7 @@ add_test(
     NAME golden_test_arith
     COMMAND ${CMAKE_COMMAND}
         -DCMD=$<TARGET_FILE:v6emul>
-        "-DARGS=--rom;${GOLDEN_DIR}/test_arith.bin;--halt-exit"
+        "-DARGS=--rom;${GOLDEN_DIR}/test_arith.bin;--load-addr;0;--halt-exit"
         -DEXPECTED=${GOLDEN_DIR}/test_arith.expected
         -P ${CMAKE_CURRENT_SOURCE_DIR}/run_golden.cmake
 )

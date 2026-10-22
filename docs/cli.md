@@ -24,7 +24,7 @@ v6emul operates in one of three modes depending on the flags provided:
 |------|------|---------|-------------|
 | `--boot-rom <path\|preset>` | string | *(none)* | Boot ROM mapped at address `0x0000` on startup and after `RESET`. Accepts a file path or a preset name: `default1` → `res/boot/boots.bin`, `default2` → `res/boot/boot.bin` |
 | `--rom <path>` | string | *(none)* | Path to a ROM file to load into emulator memory |
-| `--load-addr <addr>` | int | `0` | Memory address to load the ROM at. Supports hex (`0x100`) and decimal (`256`) |
+| `--load-addr <addr>` | int | `0x100` | Memory address to load the ROM at. Supports hex (`0x100`) and decimal (`256`) |
 
 ### FDD (Floppy Disk) Loading
 
@@ -85,10 +85,16 @@ Server mode leaves stdout unbuffered so redirected consumers receive server diag
 
 ## Examples
 
-### Start IPC server with a ROM at address 0x100
+### Start IPC server with a ROM
 
 ```bash
-v6emul --rom game.rom --load-addr 0x100 --serve
+v6emul --rom game.rom --serve
+```
+
+The ROM loads at the default address `0x100`. To load it elsewhere, pass `--load-addr` explicitly:
+
+```bash
+v6emul --rom game.rom --load-addr 0 --serve
 ```
 
 ### Start IPC server with a boot ROM
@@ -106,7 +112,7 @@ v6emul --boot-rom default1 --serve
 ### Run at maximum speed
 
 ```bash
-v6emul --rom game.rom --load-addr 0x100 --serve --speed max
+v6emul --rom game.rom --serve --speed max
 ```
 
 ### Headless test: run until HLT, dump CPU state

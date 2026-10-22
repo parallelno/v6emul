@@ -461,7 +461,7 @@ Options:
   --dump-cpu            Print full CPU state on exit (registers, flags, PC, SP, cycles)
   --dump-memory         Print full 64K memory dump on exit (hex)
   --dump-ramdisk <N>    Print RAM-disk N (0–7) contents on exit (hex)
-  --load-addr <ADDR>    ROM load address in hex (default: 0x0000)
+  --load-addr <ADDR>    ROM load address in hex (default: 0x0100)
   --tcp-port <PORT>     TCP port for IPC server (default: 9876)
   --speed <SPEED>       Execution speed: 1%, 20%, 50%, 100%, 200%, max
   --log-level <LEVEL>   Log verbosity: error, warn, info, debug, trace
