@@ -25,6 +25,88 @@ add_executable(e2e_tests e2e_tests.cpp)
 target_link_libraries(e2e_tests PRIVATE v6core v6ipc v6utils)
 add_test(NAME e2e_tests COMMAND e2e_tests)
 
+add_executable(screenshot_tests
+    screenshot_tests.cpp
+    ${CMAKE_SOURCE_DIR}/app/screenshot.cpp
+)
+target_link_libraries(screenshot_tests PRIVATE v6core v6utils)
+target_include_directories(screenshot_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/app
+    ${CMAKE_SOURCE_DIR}/third_party/stb
+)
+add_test(NAME screenshot_tests COMMAND screenshot_tests)
+
+# Screenshot CLI and end-to-end tests
+set(SCREENSHOT_TEST_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/run_screenshot_cli.cmake")
+set(SCREENSHOT_E2E_BMP "${CMAKE_CURRENT_BINARY_DIR}/screenshot_e2e.BMP")
+set(SCREENSHOT_E2E_512_BMP "${CMAKE_CURRENT_BINARY_DIR}/screenshot_e2e_512.bmp")
+set(SCREENSHOT_E2E_512_ROM "${CMAKE_CURRENT_BINARY_DIR}/screenshot_e2e_512.bin")
+
+# MVI A,0x11; OUT 0x02 (enable 512 mode); HLT
+string(ASCII 62 17 211 2 118 SCREENSHOT_E2E_512_BYTES)
+file(WRITE "${SCREENSHOT_E2E_512_ROM}" "${SCREENSHOT_E2E_512_BYTES}")
+
+add_test(
+    NAME screenshot_cli_missing_path
+    COMMAND ${CMAKE_COMMAND}
+        -DCMD=$<TARGET_FILE:v6emul>
+        "-DARGS=--screenshot"
+        -DEXPECT_EXIT=1
+        "-DEXPECT_STDOUT=Required parameter \"screenshot\" or its value was not provided."
+        "-DEXPECT_STDOUT2=Parameters:"
+        -P ${SCREENSHOT_TEST_SCRIPT}
+)
+
+add_test(
+    NAME screenshot_cli_bad_extension
+    COMMAND ${CMAKE_COMMAND}
+        -DCMD=$<TARGET_FILE:v6emul>
+        "-DARGS=--screenshot;out.png;--run-frames;1"
+        -DEXPECT_EXIT=1
+        "-DEXPECT_STDERR=unsupported screenshot extension"
+        -P ${SCREENSHOT_TEST_SCRIPT}
+)
+
+add_test(
+    NAME screenshot_cli_requires_stop_condition
+    COMMAND ${CMAKE_COMMAND}
+        -DCMD=$<TARGET_FILE:v6emul>
+        "-DARGS=--screenshot;out.bmp"
+        -DEXPECT_EXIT=1
+        "-DEXPECT_STDERR=--screenshot requires --halt-exit, --run-frames, or --run-cycles"
+        -P ${SCREENSHOT_TEST_SCRIPT}
+)
+
+file(REMOVE "${SCREENSHOT_E2E_BMP}")
+add_test(
+    NAME screenshot_e2e_bmp
+    COMMAND ${CMAKE_COMMAND}
+        -DCMD=$<TARGET_FILE:v6emul>
+        "-DARGS=--rom;${CMAKE_CURRENT_SOURCE_DIR}/golden/test_port.bin;--load-addr;0;--run-frames;1;--screenshot;${SCREENSHOT_E2E_BMP}"
+        -DEXPECT_EXIT=0
+        -DEXPECT_FILE=${SCREENSHOT_E2E_BMP}
+        -DEXPECT_MAGIC=424d
+        -DEXPECT_SIZE=1000
+        -DEXPECT_WIDTH=256
+        -DEXPECT_HEIGHT=256
+        -P ${SCREENSHOT_TEST_SCRIPT}
+)
+
+file(REMOVE "${SCREENSHOT_E2E_512_BMP}")
+add_test(
+    NAME screenshot_e2e_bmp_512_mode
+    COMMAND ${CMAKE_COMMAND}
+        -DCMD=$<TARGET_FILE:v6emul>
+        "-DARGS=--rom;${SCREENSHOT_E2E_512_ROM};--load-addr;0;--run-frames;1;--screenshot;${SCREENSHOT_E2E_512_BMP}"
+        -DEXPECT_EXIT=0
+        -DEXPECT_FILE=${SCREENSHOT_E2E_512_BMP}
+        -DEXPECT_MAGIC=424d
+        -DEXPECT_SIZE=1000
+        -DEXPECT_WIDTH=512
+        -DEXPECT_HEIGHT=256
+        -P ${SCREENSHOT_TEST_SCRIPT}
+)
+
 # Golden tests: run v6emul with test ROM and compare stdout to expected output
 set(GOLDEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/golden")
 

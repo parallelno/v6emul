@@ -6,4 +6,5 @@ namespace dev { class Hardware; }
 
 int RunTestMode(dev::Hardware& hw, const std::string& romPath,
 	int loadAddr, bool haltExit, int runFrames, int runCycles,
-	bool dumpCpu, bool dumpMemory, int dumpRamdisk);
+	bool dumpCpu, bool dumpMemory, int dumpRamdisk,
+	const std::string& screenshotPath);

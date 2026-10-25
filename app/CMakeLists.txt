@@ -3,10 +3,12 @@ add_executable(v6emul
     ipc_request.cpp
     server_mode.cpp
     test_mode.cpp
+    screenshot.cpp
 )
 
 target_link_libraries(v6emul PRIVATE v6core v6ipc v6utils)
 target_include_directories(v6emul PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_BINARY_DIR}/generated
+    ${CMAKE_SOURCE_DIR}/third_party/stb
 )

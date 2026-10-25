@@ -59,6 +59,27 @@ Any other value is treated as an explicit file path. Preset paths are resolved r
 
 Server mode leaves stdout unbuffered so redirected consumers receive server diagnostics and Lua `print()` output while emulation is running.
 
+### Screenshot (Test Mode)
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--screenshot <path>` | string | *(none)* | Store a screenshot in a file on exit; the format is selected by the extension |
+
+`--screenshot` writes one image after a headless run stops through `--halt-exit`,
+`--run-frames`, or `--run-cycles`. It is not available in server-only mode.
+Supported extensions are `.bmp` and `.jpg` (case-insensitive); `.jpeg` is not
+accepted. JPEG images are written with quality 90. Existing files are
+overwritten. The parent directory must already exist.
+
+The image contains the active display area only, independent of
+`--frame-mode` and `--color-format`:
+
+- 256-color display mode: 256×256 pixels.
+- 512-color display mode: 512×256 pixels.
+
+The capture uses the frame buffer at the exact stopping point. If execution
+stops in the middle of a frame, the image may contain a partially updated frame.
+
 ### Stop Conditions (Test Mode)
 
 | Flag | Type | Default | Description |
@@ -139,6 +160,18 @@ v6emul --boot-rom default2 --fdd game.fdd --serve
 v6emul --boot-rom default2 --fdd game.fdd --fdd-drive 1 --fdd-autoboot --serve
 ```
 
+### Save a screenshot after 100 frames
+
+```bash
+v6emul --rom game.rom --run-frames 100 --screenshot frame.bmp
+```
+
+### Save a JPEG screenshot after HLT
+
+```bash
+v6emul --rom test.rom --halt-exit --screenshot test.jpg
+```
+
 ### Use a custom TCP port
 
 ```bash
@@ -184,3 +217,5 @@ The exit line reports the stop reason (`HALT` or `EXIT`), the program counter, c
 - FDD image load failures print an error and exit with code 1.
 - Invalid `--fdd-drive` values (outside 0–3) print an error and exit with code 1.
 - Invalid `--frame-mode` values print an error and exit with code 1.
+- `--screenshot` without a path prints an error to stdout, followed by the help text, and exits with code 1.
+- Unsupported screenshot extensions, use without a headless stop condition, and image write failures print an error and exit with code 1.

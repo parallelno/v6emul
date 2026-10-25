@@ -1,4 +1,5 @@
 #include "test_mode.h"
+#include "screenshot.h"
 
 #include <iostream>
 #include <format>
@@ -11,7 +12,8 @@
 
 int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
 	int _loadAddr, bool _haltExit, int _runFrames, int _runCycles,
-	bool _dumpCpu, bool _dumpMemory, int _dumpRamdisk)
+	bool _dumpCpu, bool _dumpMemory, int _dumpRamdisk,
+	const std::string& _screenshotPath)
 {
 	// Load ROM file
 	std::vector<uint8_t> romData;
@@ -105,6 +107,21 @@ int RunTestMode(dev::Hardware& _hw, const std::string& _romPath,
 				}
 				std::cout << std::endl;
 			}
+		}
+	}
+
+	if (!_screenshotPath.empty()) {
+		auto frame = _hw.GetDisplayState().frameBufferP;
+		if (!frame) {
+			std::cerr << "Error: no frame available for screenshot" << std::endl;
+			return 1;
+		}
+
+		std::string error;
+		if (!dev::SaveScreenshot(_screenshotPath, *frame,
+			_hw.GetIoState().displayMode, error)) {
+			std::cerr << "Error: " << error << std::endl;
+			return 1;
 		}
 	}
 

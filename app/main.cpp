@@ -15,6 +15,7 @@
 #include "v6emul_version.h"
 
 #include "server_mode.h"
+#include "screenshot.h"
 #include "test_mode.h"
 
 namespace
@@ -89,6 +90,13 @@ int main(int argc, char* argv[])
 	auto colorFormat = args.GetString("color-format", "Pixel format for GET_FRAME_RAW: abgr (default), argb", false, "abgr");
 	auto frameModeStr = args.GetString("frame-mode", "Frame region returned by IPC: full, bordered (default), borderless", false, "bordered");
 	auto logLevel = args.GetString("log-level", "Log verbosity: error, warn, info, debug, trace", false, "info");
+	auto screenshotPath = args.GetString("screenshot",
+		"Store a screenshot in a file on exit; format is selected by the extension (.bmp or .jpg)",
+		false, "");
+	const bool screenshotRequested = args.HasFlag("screenshot");
+	if (screenshotRequested && screenshotPath.empty()) {
+		args.RequirementMsg("screenshot");
+	}
 
 	if (!args.IsRequirementSatisfied()) return 1;
 	if (!args.CheckUnknownArgs()) return 1;
@@ -96,6 +104,21 @@ int main(int argc, char* argv[])
 	if (serve) std::setvbuf(stdout, nullptr, _IONBF, 0);
 
 	bool testMode = haltExit || runFrames > 0 || runCycles > 0;
+
+	if (screenshotRequested) {
+		if (!testMode) {
+			std::cerr << "Error: --screenshot requires --halt-exit, --run-frames, or --run-cycles"
+				<< std::endl;
+			return 1;
+		}
+		dev::ScreenshotFormat screenshotFormat;
+		if (!dev::DetectScreenshotFormat(screenshotPath, screenshotFormat)) {
+			std::cerr << std::format(
+				"Error: unsupported screenshot extension for '{}' (supported: .bmp, .jpg)",
+				screenshotPath) << std::endl;
+			return 1;
+		}
+	}
 
 	// Banner mode: no flags at all
 	if (!testMode && !serve) {
@@ -179,7 +202,8 @@ int main(int argc, char* argv[])
 	}
 
 	if (testMode) {
-		return RunTestMode(*hw, romPath, loadAddr, haltExit, runFrames, runCycles, dumpCpu, dumpMemory, dumpRamdisk);
+		return RunTestMode(*hw, romPath, loadAddr, haltExit, runFrames, runCycles, dumpCpu,
+			dumpMemory, dumpRamdisk, screenshotPath);
 	}
 
 	// Server mode: load ROM if provided

@@ -14,12 +14,14 @@
 
 ## Dependencies
 
-All dependencies are fetched automatically during CMake configuration:
+All dependencies are handled by CMake; libraries are either fetched automatically
+or vendored as header-only files:
 
 | Dependency | Version | Method |
 |------------|---------|--------|
 | nlohmann/json | 3.11.3 | FetchContent (header-only) |
 | LuaJIT | 2.1.0-beta3 | FetchContent + ExternalProject (static lib) |
+| stb_image_write / stb_image | vendored headers | `third_party/stb` (BMP/JPEG screenshots and test decoding) |
 
 The C++ dependencies do not need to be installed separately. CMake downloads their
 sources into the selected build directory during the first configuration. The
