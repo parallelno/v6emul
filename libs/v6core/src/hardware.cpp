@@ -699,6 +699,8 @@ void dev::Hardware::Reset()
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		DebugReqHandling(Req::INTERNAL_RESET_TRACE_HISTORY, {},
+			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 	}
 }
 
@@ -712,6 +714,8 @@ void dev::Hardware::Restart()
 	m_memory.Restart();
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
+			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		DebugReqHandling(Req::INTERNAL_RESET_TRACE_HISTORY, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 	}
 }

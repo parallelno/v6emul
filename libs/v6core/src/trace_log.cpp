@@ -34,12 +34,49 @@ void dev::TraceLog::UpdateLogBuffer(
 		return;
 	}
 
-	m_logIdx = --m_logIdx % TRACE_LOG_SIZE;
+	m_logIdx = (m_logIdx + TRACE_LOG_SIZE - 1) % TRACE_LOG_SIZE;
+	m_historyCount = std::min(m_historyCount + 1, TRACE_LOG_SIZE);
+	++m_historyGeneration;
 
 	m_log[m_logIdx].globalAddr = _memState.debug.instrGlobalAddr;
 	m_log[m_logIdx].instr.opcode = _memState.debug.instr.opcode;
 	m_log[m_logIdx].instr.dataW = opcode == CpuI8080::OPCODE_PCHL ?
 		_cpuState.regs.pc.word : _memState.debug.instr.dataW;
+}
+
+auto dev::TraceLog::FindCaller(const nlohmann::json& request, uint16_t livePc) const -> nlohmann::json
+{
+	const auto start = request.at("rangeStart").get<uint32_t>();
+	const auto end = request.at("rangeEnd").get<uint32_t>();
+	if (start >= end || end > 0x10000) throw TraceLogQueryError("invalid history range");
+	size_t cursor = 0;
+	uint16_t destination = livePc;
+	if (request.contains("callerCursor")) {
+		if (request.at("historyGeneration").get<uint64_t>() != m_historyGeneration)
+			throw TraceLogQueryError("stale history generation");
+		cursor = request.at("callerCursor").get<size_t>();
+		if (cursor >= m_historyCount) throw TraceLogQueryError("invalid history cursor");
+		destination = static_cast<uint16_t>(m_log[(m_logIdx + cursor) % TRACE_LOG_SIZE].globalAddr);
+		++cursor;
+	}
+	for (; cursor < m_historyCount; ++cursor) {
+		const auto pc = static_cast<uint16_t>(m_log[(m_logIdx + cursor) % TRACE_LOG_SIZE].globalAddr);
+		if (pc < start || pc >= end) return {{"status", "found"},
+			{"historyGeneration", m_historyGeneration}, {"callerPc", pc},
+			{"entrancePc", destination}, {"callerCursor", cursor}};
+		destination = pc;
+	}
+	return {{"status", "historyEnd"}, {"historyGeneration", m_historyGeneration}};
+}
+
+auto dev::TraceLog::CallerSuccessor(const nlohmann::json& request) const -> nlohmann::json
+{
+	if (request.at("historyGeneration").get<uint64_t>() != m_historyGeneration)
+		throw TraceLogQueryError("stale history generation");
+	const auto cursor = request.at("callerCursor").get<size_t>();
+	if (cursor >= m_historyCount) throw TraceLogQueryError("invalid history cursor");
+	const auto& item = m_log[(m_logIdx + cursor) % TRACE_LOG_SIZE];
+	return {{"address", static_cast<uint16_t>(item.globalAddr + CpuI8080::GetInstrLen(item.instr.opcode))}};
 }
 
 void dev::TraceLog::InvalidateFilter()
@@ -162,6 +199,8 @@ auto dev::TraceLog::GetDisasm(const size_t _lines, const uint8_t _filter)
 
 void dev::TraceLog::Reset()
 {
+	m_historyCount = 0;
+	++m_historyGeneration;
 	m_disasmLinesLen = m_logIdx = 0;
 	m_log[m_logIdx].globalAddr = EMPTY_ITEM;
 	InvalidateFilter();

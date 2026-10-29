@@ -42,7 +42,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-				command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET);
+				command <= static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_SUCCESSOR);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -479,6 +479,28 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 		data = *dataIt;
 	}
 
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_CALLER) ||
+		command == static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_SUCCESSOR)) {
+		const bool caller = command == static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_CALLER);
+		for (const auto& [name, value] : data.items()) {
+			if (name != "callerCursor" && name != "historyGeneration" &&
+				!(caller && (name == "rangeStart" || name == "rangeEnd")))
+				return RequestError{"invalid_request", "unsupported history field", {{"field", name}}};
+			uint64_t number = 0;
+			if (!ReadUnsigned(value, number) || number > 9007199254740991ULL)
+				return RequestError{"invalid_request", "history fields must be non-negative safe integers", {{"field", name}}};
+		}
+		if (data.contains("callerCursor") != data.contains("historyGeneration") ||
+			(!caller && !data.contains("callerCursor")))
+			return RequestError{"invalid_request", "history continuation requires cursor and generation"};
+		if (data.contains("callerCursor") && data["callerCursor"].get<uint64_t>() >= dev::TraceLog::TRACE_LOG_SIZE)
+			return RequestError{"invalid_request", "history cursor exceeds capacity"};
+		if (caller && (!data.contains("rangeStart") || !data.contains("rangeEnd") ||
+			data["rangeStart"].get<uint64_t>() >= data["rangeEnd"].get<uint64_t>() ||
+			data["rangeEnd"].get<uint64_t>() > 65536))
+			return RequestError{"invalid_request", "history query requires a valid half-open range"};
+	}
+
 	if (command == static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)) {
 		auto addressIt = data.find("addr");
 		if (addressIt == data.end() || !IsAddress(*addressIt)) {
@@ -625,7 +647,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_SCRIPT_OVERLAY_GET); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_SUCCESSOR); ++command) {
 		commands.push_back(command);
 	}
 
@@ -676,6 +698,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"paletteEntryMutation", true},
 			{"fddDismount", true},
 			{"traceLogSchema", 1},
+			{"functionHistorySchema", 1},
 			{"traceLogFilter", true},
 			{"traceLogWindowQuery", true},
 			{"traceLogLimits", {{"capacity", dev::TraceLog::TRACE_LOG_SIZE}, {"maxLines", 512}, {"maxPatternBytes", 64}}},

@@ -1914,6 +1914,44 @@ static void test_io_port_data_is_256_byte_binary()
 
 static void test_trace_log_queries()
 {
+	{
+		auto hardware = std::make_unique<dev::Hardware>("", "", true);
+		auto debug = std::make_unique<dev::Debugger>(*hardware, 1);
+		hardware->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}});
+		hardware->Request(dev::Hardware::Req::SET_MEM, {{"addr", 0},
+			{"data", std::vector<uint8_t>{0xCD, 0x06, 0x00, 0x76, 0, 0, 0x00, 0xC9}}});
+		hardware->Request(dev::Hardware::Req::RESTART);
+		hardware->Request(dev::Hardware::Req::EXECUTE_INSTR);
+		const auto caller = *hardware->Request(dev::Hardware::Req::DEBUG_HISTORY_CALLER,
+			{{"rangeStart", 6}, {"rangeEnd", 8}});
+		ASSERT_EQ(caller["callerPc"].get<int>(), 0);
+		ASSERT_EQ(caller["entrancePc"].get<int>(), 6);
+		ASSERT_EQ(caller["callerCursor"].get<int>(), 0);
+		hardware->Request(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER, nlohmann::json::object());
+		const nlohmann::json position = {{"callerCursor", caller["callerCursor"]},
+			{"historyGeneration", caller["historyGeneration"]}};
+		const auto successor = *hardware->Request(dev::Hardware::Req::DEBUG_HISTORY_SUCCESSOR, position);
+		ASSERT_EQ(successor["address"].get<int>(), 3);
+		auto parentRequest = position;
+		parentRequest["rangeStart"] = 0;
+		parentRequest["rangeEnd"] = 3;
+		const auto parent = *hardware->Request(dev::Hardware::Req::DEBUG_HISTORY_CALLER, parentRequest);
+		ASSERT_EQ(parent["status"].get<std::string>(), "historyEnd");
+		hardware->Request(dev::Hardware::Req::EXECUTE_INSTR);
+		bool stale = false;
+		try { hardware->Request(dev::Hardware::Req::DEBUG_HISTORY_SUCCESSOR, position); }
+		catch (const dev::TraceLogQueryError&) { stale = true; }
+		ASSERT_TRUE(stale);
+		hardware->Request(dev::Hardware::Req::RESTART);
+		const auto empty = *hardware->Request(dev::Hardware::Req::DEBUG_HISTORY_CALLER,
+			{{"rangeStart", 6}, {"rangeEnd", 8}});
+		ASSERT_EQ(empty["status"].get<std::string>(), "historyEnd");
+		ASSERT_TRUE(empty["historyGeneration"] != caller["historyGeneration"]);
+		const auto invalid = dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_CALLER)},
+			{dev::ipc::FIELD_DATA, {{"rangeStart", 8}, {"rangeEnd", 6}}}});
+		ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(invalid));
+	}
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
 	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));

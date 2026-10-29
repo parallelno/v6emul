@@ -211,11 +211,13 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		break;
 
 	case Hardware::Req::DEBUG_RECORDER_PLAY_FORWARD:
+		m_traceLog.Reset();
 		m_recorder.PlayForward(_reqDataJ["frames"], _cpuStateP, _memStateP,
 								_ioStateP, _displayStateP);
 		break;
 
 	case Hardware::Req::DEBUG_RECORDER_PLAY_REVERSE:
+		m_traceLog.Reset();
 		m_recorder.PlayReverse(_reqDataJ["frames"], _cpuStateP, _memStateP,
 								_ioStateP, _displayStateP);
 		break;
@@ -241,6 +243,10 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		std::vector<uint8_t> data(binaryData.begin(), binaryData.end());
 
 		m_recorder.Deserialize(data, _cpuStateP, _memStateP, _ioStateP, _displayStateP);
+		break;
+
+	case Hardware::Req::INTERNAL_RESET_TRACE_HISTORY:
+		m_traceLog.Reset();
 		break;
 	}
 	//////////////////
@@ -600,8 +606,18 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		m_traceLog.SetSaveLog(false);
 		break;
 
-	case Hardware::Req::DEBUG_TRACE_LOG_FILTER:
+	case Hardware::Req::DEBUG_TRACE_LOG_FILTER:[[fallthrough]];
+	case Hardware::Req::DEBUG_HISTORY_CALLER:[[fallthrough]];
+	case Hardware::Req::DEBUG_HISTORY_SUCCESSOR:
 		if (m_hardware.IsRunning()) throw TraceLogQueryError("trace-log queries require stopped hardware");
+		if (_req == Hardware::Req::DEBUG_HISTORY_CALLER) {
+			out = m_traceLog.FindCaller(_reqDataJ, _cpuStateP->regs.pc.word);
+			break;
+		}
+		if (_req == Hardware::Req::DEBUG_HISTORY_SUCCESSOR) {
+			out = m_traceLog.CallerSuccessor(_reqDataJ);
+			break;
+		}
 		out = m_traceLog.CreateFilter(
 			_reqDataJ.value("addressPattern", std::string{}),
 			_reqDataJ.value("instructionPattern", std::string{}));

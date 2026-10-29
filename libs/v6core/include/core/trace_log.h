@@ -67,6 +67,8 @@ namespace dev
 			const std::string& instructionPattern) -> nlohmann::json;
 		auto GetFilterWindow(uint64_t filterId, size_t start,
 			size_t lines) const -> nlohmann::json;
+		auto FindCaller(const nlohmann::json& request, uint16_t livePc) const -> nlohmann::json;
+		auto CallerSuccessor(const nlohmann::json& request) const -> nlohmann::json;
 		static auto GetLogFilename() -> std::string;
 		auto GetPath() const -> const std::string& { return m_saveLogPath; };
 
@@ -91,6 +93,8 @@ namespace dev
 		std::vector<QueryEntry> m_filteredEntries;
 		uint64_t m_filterGeneration = 0;
 		uint64_t m_activeFilterId = 0;
+		uint64_t m_historyGeneration = 1;
+		size_t m_historyCount = 0;
 	};
 
 

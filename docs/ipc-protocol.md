@@ -700,6 +700,28 @@ function but does not undo arbitrary shared Lua globals.
 | 51 | `DEBUG_ATTACH` | `{"data": bool}` |
 | 52 | `DEBUG_RESET` | — |
 
+## Function history schema 1
+
+Server information advertises `functionHistorySchema: 1` and commands 111/112.
+Both requests require paused hardware. Ranges and returned addresses use 16-bit
+CPU coordinates; stored global addresses are projected to their low 16 bits.
+
+- **111 `DEBUG_HISTORY_CALLER`:** `{rangeStart, rangeEnd, callerCursor?,
+  historyGeneration?}`. The range is half-open with end up to 65536. Cursor and
+  generation are supplied together for continuations. Returns `{status:
+  "found", historyGeneration, callerPc, entrancePc, callerCursor}` or
+  `{status: "historyEnd", historyGeneration}`.
+- **112 `DEBUG_HISTORY_SUCCESSOR`:** `{callerCursor, historyGeneration}` returns
+  `{address}`: recorded caller PC plus recorded opcode length, modulo 65536.
+
+Cursor zero is the newest completed instruction. Initial searches use live PC
+as the destination; continuations initialize from the cursor record and scan
+strictly older entries. Generation changes with recorded history mutations,
+reset, and recorder timeline replacement. Trace Log filtering leaves it intact.
+Stale generation, out-of-bounds cursor, malformed fields, and invalid ranges are
+rejected. The history generation remains a JavaScript-safe integer in practical
+use. The buffer retains 300000 records; overwritten history ends the search.
+
 ## Throughput
 
 - Frame size: 768 × 312 × 4 bytes = 958,464 bytes
