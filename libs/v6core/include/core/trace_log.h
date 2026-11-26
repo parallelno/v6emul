@@ -69,6 +69,7 @@ namespace dev
 			size_t lines) const -> nlohmann::json;
 		auto FindCaller(const nlohmann::json& request, uint16_t livePc) const -> nlohmann::json;
 		auto CallerSuccessor(const nlohmann::json& request) const -> nlohmann::json;
+		auto ActiveCalls(uint16_t sp, const Memory::State& memory) const -> nlohmann::json;
 		static auto GetLogFilename() -> std::string;
 		auto GetPath() const -> const std::string& { return m_saveLogPath; };
 
@@ -81,6 +82,7 @@ namespace dev
 		void UpdateLogBuffer(
 			const CpuI8080::State& _cpuState, const Memory::State& _memState);
 		void InvalidateFilter();
+		void TrackCall(const CpuI8080::State& cpu, const Memory::Debug& memory);
 		static auto GlobMatches(const std::string& pattern, const std::string& value) -> bool;
 		static auto MakeQueryEntry(const Item& item, const DebugData& debugData) -> QueryEntry;
 
@@ -95,6 +97,12 @@ namespace dev
 		uint64_t m_activeFilterId = 0;
 		uint64_t m_historyGeneration = 1;
 		size_t m_historyCount = 0;
+		static constexpr size_t MAX_ACTIVE_CALLS = 256;
+		struct ActiveCall {
+			uint16_t callerPc, entryPc, returnPc, stackSlot;
+			GlobalAddr low, high;
+		};
+		std::vector<ActiveCall> m_activeCalls;
 	};
 
 

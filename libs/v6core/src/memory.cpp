@@ -104,6 +104,7 @@ auto dev::Memory::CpuReadInstr(const Addr _addr, const AddrSpace _addrSpace,
 
 void dev::Memory::CpuInvokesRst7()
 {
+	m_state.debug.interrupt = true;
 	m_state.debug.instr.array[0] = 0xFF; // OPCODE_RST7
 }
 

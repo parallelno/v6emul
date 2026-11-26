@@ -635,6 +635,10 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		break;
 
 	case Req::DEBUG_ATTACH:
+		if (m_debugAttached != dataJ["data"].get<bool>() && DebugReqHandling) {
+			DebugReqHandling(Req::INTERNAL_RESET_TRACE_HISTORY, {},
+				m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+		}
 		m_debugAttached = dataJ["data"];
 		break;
 

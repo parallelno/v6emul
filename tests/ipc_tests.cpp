@@ -1912,6 +1912,51 @@ static void test_io_port_data_is_256_byte_binary()
 	}
 }
 
+static void test_active_calls_outlive_trace_and_track_recursion()
+{
+	using Req = dev::Hardware::Req;
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debug = std::make_unique<dev::Debugger>(*hw, 1);
+	hw->Request(Req::DEBUG_ATTACH, {{"data", true}});
+	// 0005 CALL 0009; 000C CZ 0009 recurses once. At the second level
+	// CZ is not taken. The loop at 0014 stays in the callee until patched.
+	hw->Request(Req::SET_MEM, {{"addr", 0}, {"data", std::vector<uint8_t>{
+		0x31, 0x00, 0x80, 0x3E, 0x00, 0xCD, 0x09, 0x00, 0x76,
+		0x3C, 0xFE, 0x01, 0xCC, 0x09, 0x00, 0xC3, 0x14, 0x00,
+		0, 0, 0xC3, 0x14, 0x00,
+	}}});
+	hw->Request(Req::RESTART);
+	for (int i = 0; i < 110; ++i) hw->Request(Req::EXECUTE_FRAME_NO_BREAKS);
+	const auto active = (*hw->Request(Req::DEBUG_ACTIVE_CALLS))["frames"];
+	ASSERT_EQ(active.size(), size_t(2));
+	ASSERT_EQ(active[0]["callerPc"].get<int>(), 12);
+	ASSERT_EQ(active[0]["entryPc"].get<int>(), 9);
+	ASSERT_EQ(active[0]["returnPc"].get<int>(), 15);
+	ASSERT_EQ(active[1]["callerPc"].get<int>(), 5);
+	ASSERT_EQ(active[1]["returnPc"].get<int>(), 8);
+	const auto legacy = *hw->Request(Req::DEBUG_HISTORY_CALLER, {{"rangeStart", 9}, {"rangeEnd", 23}});
+	ASSERT_EQ(legacy["status"].get<std::string>(), "historyEnd");
+	// Do not expose a return address after software overwrites its stack slot.
+	hw->Request(Req::SET_MEM, {{"addr", 0x7FFC}, {"data", std::vector<uint8_t>{0xFF}}});
+	ASSERT_TRUE((*hw->Request(Req::DEBUG_ACTIVE_CALLS))["frames"].empty());
+	hw->Request(Req::SET_MEM, {{"addr", 0x7FFC}, {"data", std::vector<uint8_t>{0x0F}}});
+
+	// Return from the inner and then outer activation, both at the same entry.
+	hw->Request(Req::SET_MEM, {{"addr", 20}, {"data", std::vector<uint8_t>{0xC9}}});
+	hw->Request(Req::EXECUTE_INSTR);
+	ASSERT_EQ((*hw->Request(Req::DEBUG_ACTIVE_CALLS))["frames"].size(), size_t(1));
+	hw->Request(Req::EXECUTE_INSTR);
+	hw->Request(Req::EXECUTE_INSTR);
+	ASSERT_TRUE((*hw->Request(Req::DEBUG_ACTIVE_CALLS))["frames"].empty());
+	hw->Request(Req::RESTART);
+	hw->Request(Req::EXECUTE_INSTR);
+	hw->Request(Req::EXECUTE_INSTR);
+	hw->Request(Req::EXECUTE_INSTR);
+	ASSERT_EQ((*hw->Request(Req::DEBUG_ACTIVE_CALLS))["frames"].size(), size_t(1));
+	hw->Request(Req::RESTART);
+	ASSERT_TRUE((*hw->Request(Req::DEBUG_ACTIVE_CALLS))["frames"].empty());
+}
+
 static void test_trace_log_queries()
 {
 	{
@@ -2514,6 +2559,7 @@ int main()
 	test_hardware_statistics_and_mutations();
 	test_io_port_data_is_256_byte_binary();
 	test_trace_log_queries();
+	test_active_calls_outlive_trace_and_track_recursion();
 	test_script_protocol();
 	test_script_overlay_protocol();
 	test_script_overlay_capacity();

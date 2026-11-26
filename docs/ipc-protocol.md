@@ -722,6 +722,20 @@ Stale generation, out-of-bounds cursor, malformed fields, and invalid ranges are
 rejected. The history generation remains a JavaScript-safe integer in practical
 use. The buffer retains 300000 records; overwritten history ends the search.
 
+## Active call stack schema 1
+
+Server information advertises `activeCallStackSchema: 1` and command **113
+`DEBUG_ACTIVE_CALLS`**. The request takes no arguments and requires paused
+hardware. It returns `{frames: [{callerPc, entryPc, returnPc}, ...]}` with
+16-bit CPU addresses, newest activation first, up to 256 entries. For a hardware
+interrupt, `callerPc` is the interrupted PC (also the saved return PC).
+
+Taken CALL/RST instructions push activations; taken returns retire them.
+Completed calls and ordinary instructions do not consume capacity. The result
+stops at a return slot that is no longer on the current mapped stack or whose
+contents changed. Detach, reset, restart, and recorder timeline changes clear
+tracking. This command does not change Trace Log or its legacy caller queries.
+
 ## Throughput
 
 - Frame size: 768 × 312 × 4 bytes = 958,464 bytes

@@ -42,7 +42,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-				command <= static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_SUCCESSOR);
+				command <= static_cast<int>(dev::Hardware::Req::DEBUG_ACTIVE_CALLS);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -500,6 +500,9 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 			data["rangeEnd"].get<uint64_t>() > 65536))
 			return RequestError{"invalid_request", "history query requires a valid half-open range"};
 	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_ACTIVE_CALLS) && !data.empty()) {
+		return RequestError{"invalid_request", "active calls do not take arguments"};
+	}
 
 	if (command == static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)) {
 		auto addressIt = data.find("addr");
@@ -647,7 +650,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_HISTORY_SUCCESSOR); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_ACTIVE_CALLS); ++command) {
 		commands.push_back(command);
 	}
 
@@ -699,6 +702,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"fddDismount", true},
 			{"traceLogSchema", 1},
 			{"functionHistorySchema", 1},
+			{"activeCallStackSchema", 1},
 			{"traceLogFilter", true},
 			{"traceLogWindowQuery", true},
 			{"traceLogLimits", {{"capacity", dev::TraceLog::TRACE_LOG_SIZE}, {"maxLines", 512}, {"maxPatternBytes", 64}}},

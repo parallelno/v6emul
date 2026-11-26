@@ -142,7 +142,8 @@ namespace dev
 			uint8_t write[2];
 			uint8_t writeLen = 0;
 			uint8_t beforeWrite[2];
-			inline void Init() { instrLen = readLen = writeLen= 0; }
+			bool interrupt = false;
+			inline void Init() { instrLen = readLen = writeLen= 0; interrupt = false; }
 		};
 #pragma pack(pop)
 

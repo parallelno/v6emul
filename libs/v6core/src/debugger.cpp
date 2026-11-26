@@ -243,12 +243,13 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		std::vector<uint8_t> data(binaryData.begin(), binaryData.end());
 
 		m_recorder.Deserialize(data, _cpuStateP, _memStateP, _ioStateP, _displayStateP);
+		m_traceLog.Reset();
 		break;
+	}
 
 	case Hardware::Req::INTERNAL_RESET_TRACE_HISTORY:
 		m_traceLog.Reset();
 		break;
-	}
 	//////////////////
 	//
 	// Breakpoints
@@ -627,6 +628,11 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		if (m_hardware.IsRunning()) throw TraceLogQueryError("trace-log queries require stopped hardware");
 		out = m_traceLog.GetFilterWindow(_reqDataJ["filterId"],
 			_reqDataJ["start"], _reqDataJ["lines"]);
+		break;
+
+	case Hardware::Req::DEBUG_ACTIVE_CALLS:
+		if (m_hardware.IsRunning()) throw TraceLogQueryError("active calls require stopped hardware");
+		out = m_traceLog.ActiveCalls(_cpuStateP->regs.sp.word, *_memStateP);
 		break;
 
 	default:
