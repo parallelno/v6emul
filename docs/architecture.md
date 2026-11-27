@@ -133,6 +133,9 @@ The `Fdc1793` class emulates the **KR1818WG93** (Soviet WD1793 clone):
 - Scripts retain text and rectangle overlays, polled through `DEBUG_SCRIPT_OVERLAY_GET`
 - Managed through IPC commands: `DEBUG_SCRIPT_ADD`, `DEBUG_SCRIPT_DEL`, `DEBUG_SCRIPT_GET_ALL`, etc.
 
+See [Lua Scripts](scripts.md) for the execution model, the intrinsic reference, overlay
+semantics, limits, and worked examples.
+
 ## Debug Subsystem
 
 Debug is fully **opt-in** — activated via `DEBUG_ATTACH`. Features:

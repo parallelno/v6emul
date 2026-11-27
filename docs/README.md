@@ -9,6 +9,7 @@
 | [Building](building.md) | Build prerequisites, CMake configuration, and compilation |
 | [CLI Reference](cli.md) | Command-line options, modes, and examples |
 | [IPC Protocol](ipc-protocol.md) | Wire format, message framing, command reference |
+| [Lua Scripts](scripts.md) | Scripting model, Lua intrinsics, overlays, limits, and examples |
 | [Architecture](architecture.md) | Thread model, library hierarchy, code structure |
 | [Test Client](test-client.md) | Win32 test client for frame display and debugging |
 | [Publishing](publishing.md) | CI workflow, versioning, and how releases are published to GitHub |

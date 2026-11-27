@@ -687,6 +687,9 @@ script removes its owned overlays; clients initiate those operations and update
 their local overlay state accordingly. Deleting a script releases its compiled
 function but does not undo arbitrary shared Lua globals.
 
+See [Lua Scripts](scripts.md) for the scripting model, the complete intrinsic
+reference, overlay rendering semantics, limits, and worked examples.
+
 ### Debug: Recorder
 
 | cmd | Name |

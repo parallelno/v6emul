@@ -43,6 +43,7 @@ Full reference is in the [`docs/`](docs/README.md) folder:
 - [Test Client](docs/test-client.md) — running and using the sample client
 - [Building](docs/building.md) — prerequisites, presets, and test commands
 - [IPC Protocol](docs/ipc-protocol.md) — wire format, commands, and framing
+- [Lua Scripts](docs/scripts.md) — scripting model, intrinsics, overlays, and examples
 - [Publishing](docs/publishing.md) — CI workflow, versioning, and GitHub releases
 
 ### Build from source
