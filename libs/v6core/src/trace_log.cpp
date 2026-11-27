@@ -18,8 +18,8 @@ void dev::TraceLog::Update(
 	const Display::State& _displayState)
 {
 	InvalidateFilter();
-	TrackCall(_cpuState, _memState.debug);
 	UpdateLogBuffer(_cpuState, _memState);
+	TrackCall(_cpuState, _memState.debug);
 
 	SaveLog(_cpuState, _memState, _displayState);
 }
@@ -40,7 +40,7 @@ void dev::TraceLog::TrackCall(const CpuI8080::State& cpu, const Memory::Debug& m
 		if (reused != m_activeCalls.end()) m_activeCalls.erase(reused, m_activeCalls.end());
 		if (m_activeCalls.size() == MAX_ACTIVE_CALLS) m_activeCalls.erase(m_activeCalls.begin());
 		m_activeCalls.push_back({callerPc, cpu.regs.pc.word, returnPc, sp,
-			memory.writeGlobalAddr[1], memory.writeGlobalAddr[0]});
+			memory.writeGlobalAddr[1], memory.writeGlobalAddr[0], m_historyGeneration});
 	} else if (memory.readLen == 2 && ((opcode & 0xC7) == 0xC0 || opcode == 0xC9 || opcode == 0xD9)) {
 		const auto slot = static_cast<uint16_t>(sp - 2);
 		const auto returned = std::find_if(m_activeCalls.begin(), m_activeCalls.end(),
@@ -61,10 +61,12 @@ auto dev::TraceLog::ActiveCalls(uint16_t sp, const Memory::State& memory) const 
 			memory.GetGlobalAddr(it->stackSlot, Memory::AddrSpace::STACK) != it->low ||
 			memory.GetGlobalAddr(static_cast<uint16_t>(it->stackSlot + 1), Memory::AddrSpace::STACK) != it->high) break;
 		if (it->returnPc != (ram[it->low] | ram[it->high] << 8)) break;
-		frames.push_back({{"callerPc", it->callerPc}, {"entryPc", it->entryPc}, {"returnPc", it->returnPc}});
+		const auto cursor = m_historyGeneration - it->traceGeneration;
+		frames.push_back({{"callerPc", it->callerPc}, {"entryPc", it->entryPc}, {"returnPc", it->returnPc},
+			{"traceCursor", cursor < m_historyCount ? nlohmann::json(cursor) : nlohmann::json(nullptr)}});
 		minimumDistance = distance + 2;
 	}
-	return {{"frames", std::move(frames)}};
+	return {{"frames", std::move(frames)}, {"historyGeneration", m_historyGeneration}};
 }
 
 void dev::TraceLog::UpdateLogBuffer(

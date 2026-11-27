@@ -736,6 +736,12 @@ stops at a return slot that is no longer on the current mapped stack or whose
 contents changed. Detach, reset, restart, and recorder timeline changes clear
 tracking. This command does not change Trace Log or its legacy caller queries.
 
+The snapshot also includes `historyGeneration`, and each frame has a
+`traceCursor` pointing to its CALL/RST instruction in that generation (or
+`null` if the instruction was overwritten). Clients may use these optional
+fields to bound logical caller searches without mistaking recursion for a
+jump-based excursion. Older schema-1 responses omit these fields.
+
 ## Throughput
 
 - Frame size: 768 × 312 × 4 bytes = 958,464 bytes

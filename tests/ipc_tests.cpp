@@ -1934,6 +1934,8 @@ static void test_active_calls_outlive_trace_and_track_recursion()
 	ASSERT_EQ(active[0]["returnPc"].get<int>(), 15);
 	ASSERT_EQ(active[1]["callerPc"].get<int>(), 5);
 	ASSERT_EQ(active[1]["returnPc"].get<int>(), 8);
+	ASSERT_TRUE(active[0]["traceCursor"].is_null());
+	ASSERT_TRUE(active[1]["traceCursor"].is_null());
 	const auto legacy = *hw->Request(Req::DEBUG_HISTORY_CALLER, {{"rangeStart", 9}, {"rangeEnd", 23}});
 	ASSERT_EQ(legacy["status"].get<std::string>(), "historyEnd");
 	// Do not expose a return address after software overwrites its stack slot.
@@ -1972,6 +1974,9 @@ static void test_trace_log_queries()
 		ASSERT_EQ(caller["callerPc"].get<int>(), 0);
 		ASSERT_EQ(caller["entrancePc"].get<int>(), 6);
 		ASSERT_EQ(caller["callerCursor"].get<int>(), 0);
+		const auto snapshot = *hardware->Request(dev::Hardware::Req::DEBUG_ACTIVE_CALLS);
+		ASSERT_EQ(snapshot["historyGeneration"], caller["historyGeneration"]);
+		ASSERT_EQ(snapshot["frames"][0]["traceCursor"].get<int>(), 0);
 		hardware->Request(dev::Hardware::Req::DEBUG_TRACE_LOG_FILTER, nlohmann::json::object());
 		const nlohmann::json position = {{"callerCursor", caller["callerCursor"]},
 			{"historyGeneration", caller["historyGeneration"]}};

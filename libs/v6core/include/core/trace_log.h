@@ -101,6 +101,7 @@ namespace dev
 		struct ActiveCall {
 			uint16_t callerPc, entryPc, returnPc, stackSlot;
 			GlobalAddr low, high;
+			uint64_t traceGeneration;
 		};
 		std::vector<ActiveCall> m_activeCalls;
 	};
