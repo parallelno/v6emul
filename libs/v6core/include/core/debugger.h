@@ -1,7 +1,7 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
+#include <chrono>
 #include <unordered_map>
 #include <vector>
 #include <array>
@@ -21,13 +21,6 @@ namespace dev
 	class Debugger
 	{
 	public:
-		static constexpr int LAST_RW_W = 32;
-		static constexpr int LAST_RW_H = 32;
-		static constexpr int LAST_RW_MAX = LAST_RW_W * LAST_RW_H; // should be squared because it is sent to GPU
-		static constexpr uint32_t LAST_RW_NO_DATA = uint32_t(-1);
-		using MemLastRW = std::array<uint32_t, Memory::MEMORY_GLOBAL_LEN>;
-		using LastRWAddrs = std::array<uint32_t, LAST_RW_MAX>;
-
 		explicit Debugger(Hardware& _hardware);
 		~Debugger();
 
@@ -39,8 +32,6 @@ namespace dev
 			CpuI8080::State* _cpuStateP, Memory::State* _memStateP,
 			IO::State* _ioStateP, Display::State* _displayStateP) -> nlohmann::json;
 
-		void UpdateLastRW();
-		auto GetLastRW() -> const MemLastRW* { return &m_memLastRW; }
 		auto GetTraceLog() -> TraceLog& { return m_traceLog; };
 		auto GetDebugData() -> DebugData& { return m_debugData; };
 		auto GetDisasm() -> Disasm& { return m_disasm; };
@@ -52,15 +43,19 @@ namespace dev
 		Disasm m_disasm;
 		TraceLog m_traceLog;
 
-		std::mutex m_lastRWMutex;
-		LastRWAddrs m_lastReadsAddrs; // a circular buffer that contains addresses
-		LastRWAddrs m_lastWritesAddrs; // ...
-		LastRWAddrs m_lastReadsAddrsOld; // ... used to clean up m_memLastReads
-		LastRWAddrs m_lastWritesAddrsOld; // ... ...
-		LastRWAddrs m_lastRWAddrsOut; // used to sent the data out of this thread
-		int m_lastReadsIdx = 0; // index to m_memLastReads, points to the least recently read. because it's a circular buffer, that element before it is the most recently read
-		int m_lastWritesIdx = 0; // ...
-		MemLastRW m_memLastRW; // low 2 bytes of each element contains the order of readings. 255 is the most recently read, 0 - the least recently read
-								// high 2 bytes contains the order of writings. 255 is the most recently written, 0 - the least recently written
+		// Owned entirely by the hardware thread, including IPC snapshots.
+		struct RecentAccess {
+			std::array<GlobalAddr, 1024> addresses{};
+			size_t next = 0;
+			size_t count = 0;
+			void Clear() { next = count = 0; }
+			void Add(GlobalAddr address);
+			auto Intensities(size_t base) const -> nlohmann::json;
+		};
+		RecentAccess m_recentReads, m_recentWrites;
+		bool m_collectMemoryDisplay = false;
+		unsigned m_memoryDisplayLeaseCheck = 0;
+		std::chrono::steady_clock::time_point m_memoryDisplayDeadline;
+		void RefreshMemoryDisplayLease(bool enabled);
 	};
 }

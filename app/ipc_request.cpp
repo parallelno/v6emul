@@ -42,7 +42,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-				command <= static_cast<int>(dev::Hardware::Req::DEBUG_RECORDER_MOVE);
+				command <= static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -524,6 +524,18 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 				{{"command", command}, {"field", "expectedRevision"}}};
 	}
 
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_DISPLAY_ENABLE) &&
+		(data.size() != 1 || !data.contains("enabled") || !data["enabled"].is_boolean())) {
+		return RequestError{"invalid_request", "Memory Display requires boolean enabled"};
+	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT)) {
+		uint64_t bank;
+		if (data.size() != 1 || !data.contains("bank") || !ReadUnsigned(data["bank"], bank) ||
+			bank >= dev::Memory::MEMORY_GLOBAL_LEN / dev::Memory::MEM_64K) {
+			return RequestError{"invalid_request", "Memory Display requires a physical bank index"};
+		}
+	}
+
 	if (command == static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)) {
 		auto addressIt = data.find("addr");
 		if (addressIt == data.end() || !IsAddress(*addressIt)) {
@@ -670,7 +682,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_RECORDER_MOVE); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT); ++command) {
 		commands.push_back(command);
 	}
 
@@ -724,6 +736,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"functionHistorySchema", 1},
 			{"activeCallStackSchema", 1},
 			{"recorderSchema", 1},
+			{"memoryDisplaySchema", 1},
 			{"recorderInstructionJumps100", true},
 			{"recorderSeek", true},
 			{"recorderLimits", {{"maxFrameCheckpoints", dev::RecorderTimeline<int>::MAX_FRAMES},

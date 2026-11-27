@@ -12,13 +12,9 @@
 dev::Debugger::Debugger(Hardware& _hardware)
 	:
 	m_hardware(_hardware),
-	m_lastReadsAddrs(), m_lastWritesAddrs(),
-	m_memLastRW(),
-	m_lastReadsAddrsOld(), m_lastWritesAddrsOld(),
 	m_debugData(_hardware),
 	m_disasm(_hardware, m_debugData),
-	m_traceLog(m_debugData),
-	m_lastRWAddrsOut()
+	m_traceLog(m_debugData)
 {
 
 	Hardware::DebugFunc debugFunc = std::bind
@@ -56,11 +52,8 @@ void dev::Debugger::Reset()
 	m_disasm.Reset();
 	m_debugData.Reset();
 
-	m_lastWritesAddrs.fill(uint32_t(LAST_RW_NO_DATA));
-	m_lastReadsAddrs.fill(uint32_t(LAST_RW_NO_DATA));
-	m_lastWritesIdx = 0;
-	m_lastReadsIdx = 0;
-	m_memLastRW.fill(0);
+	m_recentReads.Clear();
+	m_recentWrites.Clear();
 
 	m_traceLog.Reset();
 }
@@ -77,11 +70,13 @@ bool dev::Debugger::Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP
 {
 	// instruction check
 	m_debugData.MemRunsUpdate(_memStateP->debug.instrGlobalAddr);
+	if (m_collectMemoryDisplay && (++m_memoryDisplayLeaseCheck % 1024 == 1) &&
+		std::chrono::steady_clock::now() >= m_memoryDisplayDeadline) {
+		RefreshMemoryDisplayLease(false);
+	}
 
 	// reads check
 	{
-		std::lock_guard<std::mutex> mlock(m_lastRWMutex);
-
 		for (int i = 0; i < _memStateP->debug.readLen; i++)
 		{
 			GlobalAddr globalAddr = _memStateP->debug.readGlobalAddr[i];
@@ -91,15 +86,12 @@ bool dev::Debugger::Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP
 
 			m_debugData.GetWatchpoints().Check(Watchpoint::Access::R, globalAddr, val);
 
-			m_lastReadsAddrs[m_lastReadsIdx++] = globalAddr;
-			m_lastReadsIdx %= LAST_RW_MAX;
+			if (m_collectMemoryDisplay) m_recentReads.Add(globalAddr);
 		}
 	}
 
 	// writes check
 	{
-		std::lock_guard<std::mutex> mlock(m_lastRWMutex);
-
 		for (int i = 0; i < _memStateP->debug.writeLen; i++)
 		{
 			GlobalAddr globalAddr = _memStateP->debug.writeGlobalAddr[i];
@@ -118,8 +110,7 @@ bool dev::Debugger::Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP
 			m_debugData.GetWatchpoints().Check(
 				Watchpoint::Access::W, globalAddr, val, _memStateP->debug.beforeWrite[i]);
 
-			m_lastWritesAddrs[m_lastWritesIdx++] = globalAddr;
-			m_lastWritesIdx %= LAST_RW_MAX;
+			if (m_collectMemoryDisplay) m_recentWrites.Add(globalAddr);
 		}
 	}
 
@@ -197,16 +188,15 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		m_debugData.CancelCodePerfSamples();
 		m_debugData.GetWatchpoints().ResetMatches();
 		m_disasm.Reset();
-		std::lock_guard lock(m_lastRWMutex);
-		m_lastReadsAddrs.fill(LAST_RW_NO_DATA);
-		m_lastWritesAddrs.fill(LAST_RW_NO_DATA);
-		m_lastReadsIdx = m_lastWritesIdx = 0;
-		m_memLastRW.fill(0);
+		m_recentReads.Clear();
+		m_recentWrites.Clear();
 		break;
 	}
 
 	case Hardware::Req::INTERNAL_RESET_TRACE_HISTORY:
 		m_traceLog.Reset();
+		m_recentReads.Clear();
+		m_recentWrites.Clear();
 		break;
 	//////////////////
 	//
@@ -593,6 +583,21 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 		out = m_traceLog.ActiveCalls(_cpuStateP->regs.sp.word, *_memStateP);
 		break;
 
+	case Hardware::Req::DEBUG_MEMORY_DISPLAY_ENABLE:
+		RefreshMemoryDisplayLease(_reqDataJ.at("enabled").get<bool>());
+		break;
+
+	case Hardware::Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT: {
+		const auto bank = _reqDataJ.at("bank").get<size_t>();
+		if (bank >= Memory::MEMORY_GLOBAL_LEN / Memory::MEM_64K) throw std::out_of_range("invalid memory display bank");
+		RefreshMemoryDisplayLease(true);
+		const auto base = bank * Memory::MEM_64K;
+		const auto start = _memStateP->ramP->data() + base;
+		out = {{"bank", bank}, {"bytes", nlohmann::json::binary({start, start + Memory::MEM_64K})},
+			{"reads", m_recentReads.Intensities(base)}, {"writes", m_recentWrites.Intensities(base)}};
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -600,49 +605,33 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 	return out;
 }
 
-// UI thread
-void dev::Debugger::UpdateLastRW()
+void dev::Debugger::RefreshMemoryDisplayLease(bool enabled)
 {
-	// remove old stats
-	for (int i = 0; i < m_lastReadsAddrsOld.size(); i++)
-	{
-		auto globalAddrLastRead = m_lastReadsAddrsOld[i];
-		if (globalAddrLastRead != LAST_RW_NO_DATA) {
-			m_memLastRW[globalAddrLastRead] = 0;
-		}
-		auto globalAddrLastWrite = m_lastWritesAddrsOld[i];
-		if (globalAddrLastWrite != LAST_RW_NO_DATA) {
-			m_memLastRW[globalAddrLastWrite] = 0;
-		}
+	const auto now = std::chrono::steady_clock::now();
+	if (!enabled || !m_collectMemoryDisplay || now >= m_memoryDisplayDeadline) {
+		m_recentReads.Clear();
+		m_recentWrites.Clear();
+		m_memoryDisplayLeaseCheck = 0;
 	}
+	m_collectMemoryDisplay = enabled;
+	if (enabled) m_memoryDisplayDeadline = now + std::chrono::seconds(2);
+}
 
-	// copy new reads stats
-	std::lock_guard<std::mutex> mlock(m_lastRWMutex);
-	uint16_t readsIdx = m_lastReadsIdx;
-	for (auto globalAddr : m_lastReadsAddrs){
-		if (globalAddr != LAST_RW_NO_DATA)
-		{
-			auto val = m_memLastRW[globalAddr] & 0xFFFF0000; // remove reads, keep writes
-			m_memLastRW[globalAddr] =
-				val |
-				static_cast<uint16_t>(LAST_RW_MAX - readsIdx) % LAST_RW_MAX;
-		}
-		readsIdx--;
+void dev::Debugger::RecentAccess::Add(GlobalAddr address)
+{
+	addresses[next] = address;
+	next = (next + 1) % addresses.size();
+	count = std::min(count + 1, addresses.size());
+}
+
+auto dev::Debugger::RecentAccess::Intensities(size_t base) const -> nlohmann::json
+{
+	std::vector<uint8_t> values(Memory::MEM_64K);
+	for (size_t age = 0; age < count; ++age) {
+		const auto address = addresses[(next + addresses.size() - 1 - age) % addresses.size()];
+		if (address < base || address >= base + values.size()) continue;
+		auto& intensity = values[address - base];
+		if (!intensity) intensity = static_cast<uint8_t>(255 - age * 254 / (addresses.size() - 1));
 	}
-
-	// copy new writes stats
-	uint16_t writesIdx = m_lastWritesIdx;
-	for (auto globalAddr : m_lastWritesAddrs){
-		if (globalAddr != LAST_RW_NO_DATA)
-		{
-			auto val = m_memLastRW[globalAddr] & 0x0000FFFF; // remove writes, keep reads
-			m_memLastRW[globalAddr] =
-				val |
-				(static_cast<uint16_t>(LAST_RW_MAX - writesIdx) % LAST_RW_MAX)<<16;
-		}
-		writesIdx--;
-	}
-
-	m_lastReadsAddrsOld = m_lastReadsAddrs;
-	m_lastWritesAddrsOld = m_lastWritesAddrs;
+	return nlohmann::json::binary(std::move(values));
 }

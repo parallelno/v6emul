@@ -274,6 +274,19 @@ Each response value is a little-endian 16-bit word beginning at `addr + offset`.
 }
 ```
 
+### Memory Display Schema 1
+
+`GET_SERVER_INFO` advertises `memoryDisplaySchema: 1`. The following commands are available while running or paused:
+
+| Command | Name | Request data | Response data |
+|---|---|---|---|
+| 116 | `DEBUG_MEMORY_DISPLAY_ENABLE` | `{enabled: boolean}` | `null` |
+| 117 | `DEBUG_MEMORY_DISPLAY_SNAPSHOT` | `{bank: integer}` | `{bank, bytes, reads, writes}` |
+
+Bank 0 is physical Main RAM (not the ROM overlay); banks 1–32 are RAM-disk pages ordered by disk and then page. Each of the three arrays is exactly 65,536 MessagePack binary bytes in ascending address order. An access intensity of 0 means no recent access; 255 is newest. Reads and writes are ranked independently in the last 1,024 events of each type. Instruction fetches and writes reverted by read-only memory edits are excluded. Access tracking requires an attached debugger; obtaining snapshots does not itself attach it.
+
+A snapshot or `enabled: true` renews a two-second tracking lease. Send `enabled: false` when the view is hidden or closed. Disconnect also disables tracking. After an expired or disabled lease, new requests start a fresh history. Reset and recorder position changes clear the history without disabling an active lease.
+
 ### Display
 
 | cmd | Name | Data | Response |

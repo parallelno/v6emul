@@ -1912,6 +1912,52 @@ static void test_io_port_data_is_256_byte_binary()
 	}
 }
 
+static void test_memory_display_snapshot()
+{
+	using Req = dev::Hardware::Req;
+	using Json = nlohmann::json;
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
+	const auto snapshot = [&](int bank) {
+		const auto result = *hw->Request(Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT, {{"bank", bank}});
+		const auto encoded = dev::ipc::Encode(dev::ipc::MakeResponse(result));
+		return dev::ipc::Decode({encoded.begin() + 4, encoded.end()})[dev::ipc::FIELD_DATA];
+	};
+	const auto validate = [](Req command, Json data) {
+		return std::holds_alternative<dev::server::IpcRequest>(dev::server::ValidateRequest({
+			{dev::ipc::FIELD_CMD, static_cast<int>(command)}, {dev::ipc::FIELD_DATA, data}}));
+	};
+	ASSERT_TRUE(validate(Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT, {{"bank", 32}}));
+	ASSERT_TRUE(!validate(Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT, {{"bank", 33}}));
+	ASSERT_TRUE(!validate(Req::DEBUG_MEMORY_DISPLAY_SNAPSHOT, {{"bank", -1}}));
+	ASSERT_TRUE(!validate(Req::DEBUG_MEMORY_DISPLAY_ENABLE, {{"enabled", 1}}));
+
+	hw->Request(Req::DEBUG_ATTACH, {{"data", true}});
+	// LDA 4000h; STA 4001h; LDA 4000h; STA 4002h.
+	hw->Request(Req::LOAD_ROM, {{"data", std::vector<uint8_t>{0x3A, 0x00, 0x40, 0x32, 0x01, 0x40, 0x3A, 0x00, 0x40, 0x32, 0x02, 0x40}}});
+	hw->Request(Req::SET_BYTE_GLOBAL, {{"addr", 0x4000}, {"data", 0xA5}});
+	hw->Request(Req::SET_BYTE_GLOBAL, {{"addr", 0x20FFFF}, {"data", 0xA7}});
+	const auto lastBank = snapshot(32);
+	ASSERT_EQ(lastBank["bank"].get<int>(), 32);
+	ASSERT_EQ(lastBank["bytes"].get_binary().size(), size_t(65536));
+	ASSERT_EQ(int(lastBank["bytes"].get_binary()[65535]), 0xA7);
+	for (int i = 0; i < 4; ++i) hw->Request(Req::EXECUTE_INSTR);
+	const auto main = snapshot(0);
+	ASSERT_EQ(int(main["bytes"].get_binary()[0x4002]), 0xA5);
+	ASSERT_EQ(int(main["reads"].get_binary()[0x4000]), 255);
+	ASSERT_EQ(int(main["reads"].get_binary()[0]), 0);
+	ASSERT_EQ(int(main["writes"].get_binary()[0x4002]), 255);
+	ASSERT_TRUE(main["writes"].get_binary()[0x4001] > 0);
+	hw->Request(Req::DEBUG_MEMORY_DISPLAY_ENABLE, {{"enabled", false}});
+	hw->Request(Req::RESTART);
+	for (int i = 0; i < 4; ++i) hw->Request(Req::EXECUTE_INSTR);
+	const auto reopened = snapshot(0);
+	for (const auto channel : {"reads", "writes"}) {
+		const auto& bytes = reopened[channel].get_binary();
+		ASSERT_TRUE(std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0; }));
+	}
+}
+
 static void test_recorder_instruction_round_trip()
 {
 	using Req = dev::Hardware::Req;
@@ -2664,6 +2710,7 @@ int main()
 	test_fdd_persistence();
 	test_hardware_statistics_and_mutations();
 	test_io_port_data_is_256_byte_binary();
+	test_memory_display_snapshot();
 	test_trace_log_queries();
 	test_recorder_instruction_round_trip();
 	test_recorder_floppy_transfer_and_halt();

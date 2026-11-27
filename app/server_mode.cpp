@@ -69,6 +69,7 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 		if (payload.empty()) {
 			if (g_shutdown.load()) break;
 			std::cout << "Client disconnected" << std::endl;
+			_hw.Request(dev::Hardware::Req::DEBUG_MEMORY_DISPLAY_ENABLE, {{"enabled", false}});
 			server.Close();
 			// Re-listen for next client
 			if (!server.Listen(_port)) {
@@ -261,6 +262,7 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 		auto respBytes = dev::ipc::Encode(responseJ);
 		if (!server.Send(respBytes)) {
 			std::cout << "Client disconnected during send" << std::endl;
+			_hw.Request(dev::Hardware::Req::DEBUG_MEMORY_DISPLAY_ENABLE, {{"enabled", false}});
 			server.Close();
 			if (!server.Listen(_port)) {
 				std::cerr << "Error: failed to re-listen" << std::endl;
