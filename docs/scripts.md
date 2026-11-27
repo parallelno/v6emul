@@ -52,8 +52,9 @@ Key rules:
   `runtime.status` as `error` and stores the bounded message (≤ 4 096 bytes). The
   emulator keeps running.
 - **Runtime errors gate scheduled execution.** An active script whose runtime status is
-  `error` is skipped by the scheduler. A successful `DEBUG_SCRIPT_RUN_ONCE` retry, or a
-  `DEBUG_SCRIPT_COMPILE` (which resets runtime to `never_run`), makes it eligible again.
+  `error` is skipped by the scheduler. A successful `DEBUG_SCRIPT_RUN_ONCE` retry, a
+  `DEBUG_SCRIPT_COMPILE`, or a path-changing `DEBUG_SCRIPT_EDIT` (both reset runtime to
+  `never_run`) makes it eligible again.
 - **Scheduling eligibility:** `active == true` **and** `compilation.status == compiled`
   **and** `runtime.status != error`.
 - **Order is unspecified.** Records are stored in an unordered map; do not rely on one
