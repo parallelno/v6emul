@@ -22,6 +22,8 @@ void dev::Audio::Reset()
 	m_buffer.fill(0);
 	m_readBuffIdx = m_writeBuffIdx = 0;
 	m_muteMul = 1.0f;
+	m_sampleCounter = 0;
+	m_accumulator = 0;
 }
 
 void dev::Audio::Init()
@@ -51,15 +53,13 @@ void dev::Audio::Clock(int _cycles, const float _beeper)
 // returns true if the output sample is ready, false otherwise
 bool dev::Audio::Downsample(float& _sample)
 {
-	static int sampleCounter = 0;
-	static float accumulator = 0;
-	accumulator += _sample;
+	m_accumulator += _sample;
 
-	if (++sampleCounter > m_downsampleRate)
+	if (++m_sampleCounter > m_downsampleRate)
 	{
-		_sample = accumulator / m_downsampleRate;
-		sampleCounter = 0;
-		accumulator = 0;
+		_sample = m_accumulator / m_downsampleRate;
+		m_sampleCounter = 0;
+		m_accumulator = 0;
 		return true;
 	}
 

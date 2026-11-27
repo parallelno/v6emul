@@ -1,8 +1,62 @@
 ﻿#include <cstdint>
 #include <cstring>
+#include <algorithm>
 
 #include "core/fdc_wd1793.h"
 #include "utils/utils.h"
+
+auto dev::Fdc1793::GetState() const -> State
+{
+	State state{{}, m_drive, m_side, m_track, m_lastS, m_irq, m_wait, m_cmd,
+		m_rwLen, m_disk ? static_cast<int>(m_disk - m_disks) : -1, -1, 0, false};
+	std::copy_n(m_regs, 5, state.regs);
+	const auto ptr = reinterpret_cast<uintptr_t>(m_ptr);
+	for (int i = 0; i < DRIVES_MAX; ++i) {
+		const auto& disk = m_disks[i];
+		auto& saved = state.disks[i];
+		std::copy_n(disk.header, 6, saved.header);
+		saved.updated = disk.updated; saved.reads = disk.reads; saved.writes = disk.writes;
+		const auto data = reinterpret_cast<uintptr_t>(disk.data);
+		const auto header = reinterpret_cast<uintptr_t>(disk.header);
+		if (ptr >= data && ptr <= data + FDD_SIZE) {
+			state.pointerDisk = i; state.pointerOffset = static_cast<int>(ptr - data); state.headerPointer = false;
+		} else if (ptr >= header && ptr <= header + sizeof(disk.header)) {
+			state.pointerDisk = i; state.pointerOffset = static_cast<int>(ptr - header); state.headerPointer = true;
+		}
+	}
+	return state;
+}
+
+void dev::Fdc1793::Restore(const State& state)
+{
+	std::copy_n(state.regs, 5, m_regs);
+	m_drive = state.drive; m_side = state.side; m_track = state.track; m_lastS = state.lastS;
+	m_irq = state.irq; m_wait = state.wait; m_cmd = state.command; m_rwLen = state.length;
+	m_disk = state.disk < 0 ? nullptr : &m_disks[state.disk];
+	m_ptr = state.pointerDisk < 0 ? nullptr : (state.headerPointer ? m_disks[state.pointerDisk].header
+		: m_disks[state.pointerDisk].data) + state.pointerOffset;
+	for (int i = 0; i < DRIVES_MAX; ++i) {
+		const auto& saved = state.disks[i];
+		auto& disk = m_disks[i];
+		std::copy_n(saved.header, 6, disk.header);
+		disk.updated = saved.updated; disk.reads = saved.reads; disk.writes = saved.writes;
+	}
+}
+
+void dev::Fdc1793::WriteBytes(uint8_t* start, size_t length, uint8_t value)
+{
+	if (m_journal) {
+		const auto ptr = reinterpret_cast<uintptr_t>(start);
+		for (int drive = 0; drive < DRIVES_MAX; ++drive) {
+			const auto base = reinterpret_cast<uintptr_t>(m_disks[drive].data);
+			if (ptr < base || ptr >= base + FDD_SIZE) continue;
+			const auto offset = static_cast<uint32_t>(ptr - base);
+			for (size_t i = 0; i < length; ++i) m_journal(drive * FDD_SIZE + offset + static_cast<uint32_t>(i), start[i], value);
+			break;
+		}
+	}
+	std::fill_n(start, length, value);
+}
 
 
 dev::FDisk::FDisk()
@@ -103,7 +157,8 @@ dev::Fdc1793::Fdc1793() { Reset(); }
 // (data pointer) on success or nulptr on failure.
 uint8_t* dev::Fdc1793::Seek(int _sideID, int _trackID, int _sectorID)
 {
-	if (!m_disk) return nullptr;
+	if (!m_disk || _trackID < 0 || _trackID >= FDD_TRACKS_PER_SIDE || _sideID < 0 || _sideID >= FDD_SIDES
+		|| _sectorID < 0 || _sectorID > FDD_SECTORS_PER_TRACK) return nullptr;
 
 	int sectors = FDD_SECTORS_PER_TRACK * (_trackID * FDD_SIDES + _sideID);
 	int sectorAdjusted = dev::Max(0, _sectorID - 1); // In CHS addressing the sector numbers always start at 1, but in the data buffer the sector numbers always start at 0.
@@ -356,12 +411,12 @@ uint8_t dev::Fdc1793::Write(const Port _reg, uint8_t _val)
 			// it only sets the track data to 0xE5
 			if ((m_ptr = Seek(0, m_regs[1], 1)))
 			{
-				memset(m_ptr, 0xE5, FDD_SECTOR_LEN * FDD_SECTORS_PER_TRACK);
+			WriteBytes(m_ptr, FDD_SECTOR_LEN * FDD_SECTORS_PER_TRACK, 0xE5);
 				m_disk->updated = true;
 			}
 			if (FDD_SIDES > 1 && (m_ptr = Seek(1, m_regs[1], 1)))
 			{
-				memset(m_ptr, 0xE5, FDD_SECTOR_LEN * FDD_SECTORS_PER_TRACK);
+			WriteBytes(m_ptr, FDD_SECTOR_LEN * FDD_SECTORS_PER_TRACK, 0xE5);
 				m_disk->updated = true;
 			}
 			break;
@@ -381,7 +436,7 @@ uint8_t dev::Fdc1793::Write(const Port _reg, uint8_t _val)
 		if (m_rwLen)
 		{
 			// Write data
-			*m_ptr++ = _val;
+			WriteBytes(m_ptr++, 1, _val);
 			m_disk->updated = true;
 			m_disk->writes++;
 			// Decrement length

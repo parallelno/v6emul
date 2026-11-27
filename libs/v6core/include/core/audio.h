@@ -26,6 +26,8 @@ namespace dev
 
         std::atomic_bool m_inited = false;
         std::atomic_int m_downsampleRate = DOWNSAMPLE_RATE;
+        int m_sampleCounter = 0;
+        float m_accumulator = 0;
 
         bool Downsample(float& _sample);
 
@@ -37,6 +39,12 @@ namespace dev
         void Mute(const bool _mute);
         void Clock(int _cycles, const float _beeper);
         void Reset();
+        struct State { int counter; float accumulator; };
+        State GetState() const { return {m_sampleCounter, m_accumulator}; }
+        void Restore(const State& state) {
+            m_sampleCounter = state.counter; m_accumulator = state.accumulator;
+            m_readBuffIdx = m_writeBuffIdx.load();
+        }
 
         // Read up to _maxSamples from the ring buffer into _out.
         // Returns the number of samples actually read.

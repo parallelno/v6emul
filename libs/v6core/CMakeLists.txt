@@ -19,7 +19,6 @@ add_library(v6core STATIC
     src/watchpoints.cpp
     src/disasm.cpp
     src/trace_log.cpp
-    src/recorder.cpp
     src/script.cpp
     src/scripts.cpp
 )

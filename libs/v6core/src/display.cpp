@@ -378,8 +378,11 @@ void dev::Display::BuffUpdate(const BufferType _bufferType)
 		break;
 
 	case dev::Display::BufferType::BACK_BUFFER:
+	{
+		std::lock_guard lock(m_backBufferMutex);
 		m_backBuffer = m_frameBuffer;
 		break;
+	}
 
 	case dev::Display::BufferType::GPU_BUFFER:
 		m_gpuBuffer = m_frameBuffer;

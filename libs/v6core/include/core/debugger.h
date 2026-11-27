@@ -15,7 +15,6 @@
 #include "core/breakpoint.h"
 #include "core/watchpoint.h"
 #include "core/trace_log.h"
-#include "core/recorder.h"
 
 namespace dev
 {
@@ -29,12 +28,10 @@ namespace dev
 		using MemLastRW = std::array<uint32_t, Memory::MEMORY_GLOBAL_LEN>;
 		using LastRWAddrs = std::array<uint32_t, LAST_RW_MAX>;
 
-		Debugger(Hardware& _hardware, const int _recordFrames);
+		explicit Debugger(Hardware& _hardware);
 		~Debugger();
 
-		void Reset(bool _resetRecorder,
-			CpuI8080::State* _cpuStateP, Memory::State* _memStateP,
-			IO::State* _ioStateP, Display::State* _displayStateP);
+		void Reset();
 
 		bool Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP,
 			IO::State* _ioStateP, Display::State* _displayStateP);
@@ -47,7 +44,6 @@ namespace dev
 		auto GetTraceLog() -> TraceLog& { return m_traceLog; };
 		auto GetDebugData() -> DebugData& { return m_debugData; };
 		auto GetDisasm() -> Disasm& { return m_disasm; };
-		auto GetRecorder() -> Recorder& { return m_recorder; };
 
 	private:
 
@@ -55,7 +51,6 @@ namespace dev
 		DebugData m_debugData;
 		Disasm m_disasm;
 		TraceLog m_traceLog;
-		Recorder m_recorder;
 
 		std::mutex m_lastRWMutex;
 		LastRWAddrs m_lastReadsAddrs; // a circular buffer that contains addresses

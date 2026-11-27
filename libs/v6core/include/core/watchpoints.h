@@ -46,6 +46,7 @@ namespace dev
 		auto GetHit() const -> const std::optional<Hit>& { return m_hit; }
 		void Clear();
 		bool CheckBreak();
+		void ResetMatches();
 
 	private:
 

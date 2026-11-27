@@ -1046,7 +1046,7 @@ static void test_structured_breakpoints()
 	ASSERT_EQ(countedBreakpoints.GetUpdates(), uint32_t(4));
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	auto getAll = [&hw]() {
 		return hw->Request(dev::Hardware::Req::DEBUG_BREAKPOINT_GET_ALL);
 	};
@@ -1096,7 +1096,7 @@ static void test_structured_breakpoints()
 static void test_structured_watchpoints()
 {
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	auto getAll = [&hw]() {
 		return hw->Request(dev::Hardware::Req::DEBUG_WATCHPOINT_GET_ALL);
 	};
@@ -1202,7 +1202,7 @@ static void test_structured_watchpoints()
 static void test_structured_code_perfs()
 {
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	auto add = [&hw](const std::string& name, const uint16_t addrEnd = 0x1010) {
 		return hw->Request(dev::Hardware::Req::DEBUG_CODE_PERF_ADD, {
 			{"name", name}, {"addrStart", 0x1000}, {"addrEnd", addrEnd}, {"active", true}
@@ -1318,7 +1318,7 @@ static void test_structured_code_perfs()
 static void test_structured_memory_edits()
 {
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
 	auto add = [&hw](const uint32_t globalAddr, const uint8_t enteredValue,
 		const bool readonly = true, const bool active = true) {
@@ -1534,7 +1534,7 @@ static void test_watchpoints_break_execution()
 
 	for (const auto& scenario : scenarios) {
 		auto hw = std::make_unique<dev::Hardware>("", "", true);
-		auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+		auto debugger = std::make_unique<dev::Debugger>(*hw);
 		ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
 		ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_CPU_SPEED,
 			{{"speed", static_cast<int>(dev::Hardware::ExecSpeed::MAX)}}));
@@ -1579,7 +1579,7 @@ static void test_watchpoints_break_execution()
 static void test_breakpoint_stop_record()
 {
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_CPU_SPEED,
 		{{"speed", static_cast<int>(dev::Hardware::ExecSpeed::MAX)}}));
@@ -1912,11 +1912,112 @@ static void test_io_port_data_is_256_byte_binary()
 	}
 }
 
+static void test_recorder_instruction_round_trip()
+{
+	using Req = dev::Hardware::Req;
+	using Json = nlohmann::json;
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debug = std::make_unique<dev::Debugger>(*hw);
+	const auto status = [&] { return *hw->Request(Req::DEBUG_RECORDER_STATUS); };
+	const auto sample = [&] {
+		return Json::array({*hw->Request(Req::GET_REGS), *hw->Request(Req::GET_BYTE_GLOBAL, {{"globalAddr", 0x4000}})});
+	};
+	const auto move = [&](const char* action) {
+		return *hw->Request(Req::DEBUG_RECORDER_MOVE, {{"action", action}, {"expectedRevision", status()["revision"]}});
+	};
+	ASSERT_TRUE(!status()["attached"].get<bool>());
+	hw->Request(Req::DEBUG_ATTACH, {{"data", true}});
+	// INR A; STA 4000h; JMP 0000h. Every third instruction writes RAM.
+	hw->Request(Req::LOAD_ROM, {{"data", std::vector<uint8_t>{0x3C, 0x32, 0x00, 0x40, 0xC3, 0x00, 0x00}}});
+	std::vector<Json> expected{sample()};
+	for (int i = 0; i < 1030; ++i) {
+		hw->Request(Req::EXECUTE_INSTR);
+		expected.push_back(sample());
+	}
+	ASSERT_EQ(status()["instructionStepsBack"].get<int>(), 1000);
+	ASSERT_TRUE(status()["timeline"]["instructionTicks"].size() < 202);
+	const auto stopBefore = (*hw->Request(Req::GET_STOP_RECORD))["sequence"].get<uint64_t>();
+	bool exact = true;
+	for (int i = 1029; i >= 30; --i) {
+		const auto reply = move("backInstruction");
+		exact &= reply["moved"].get<bool>() && sample() == expected[i];
+	}
+	ASSERT_TRUE(exact);
+	const auto oldest = *hw->Request(Req::GET_STOP_RECORD);
+	ASSERT_EQ(oldest["sequence"].get<uint64_t>(), stopBefore + 1000);
+	ASSERT_TRUE(!move("backInstruction")["moved"].get<bool>());
+	ASSERT_TRUE(*hw->Request(Req::GET_STOP_RECORD) == oldest);
+	ASSERT_EQ(status()["instructionStepsForward"].get<int>(), 1000);
+	for (int i = 31; i <= 1030; ++i) {
+		const auto reply = move("forwardInstruction");
+		exact &= reply["moved"].get<bool>() && sample() == expected[i];
+	}
+	ASSERT_TRUE(exact);
+	ASSERT_TRUE(!move("forwardInstruction")["moved"].get<bool>());
+	const auto obsolete = status()["revision"];
+	ASSERT_TRUE(move("backInstruction")["moved"].get<bool>());
+	bool stale = false;
+	try { hw->Request(Req::DEBUG_RECORDER_MOVE, {{"action", "backInstruction"}, {"expectedRevision", obsolete}}); }
+	catch (const dev::RecorderStateError& error) { stale = std::string_view(error.what()) == "stale_revision"; }
+	ASSERT_TRUE(stale);
+	hw->Request(Req::EXECUTE_INSTR);
+	ASSERT_EQ(status()["instructionStepsForward"].get<int>(), 0);
+	ASSERT_TRUE(sample() == expected.back());
+
+	hw->Request(Req::EXECUTE_FRAME_NO_BREAKS);
+	const auto checkpoint = status();
+	ASSERT_TRUE(checkpoint["position"]["atFrameCheckpoint"].get<bool>());
+	hw->Request(Req::EXECUTE_FRAME_NO_BREAKS);
+	const auto newer = status();
+	ASSERT_TRUE(move("backFrame")["status"]["position"] == checkpoint["position"] ||
+		status()["position"]["id"] == checkpoint["position"]["id"]);
+	ASSERT_EQ(status()["instructionStepsForward"].get<int>(), 0);
+	ASSERT_TRUE(move("forwardFrame")["status"]["position"] == newer["position"]);
+	hw->Request(Req::DEBUG_ATTACH, {{"data", false}});
+	ASSERT_TRUE(status()["timeline"].is_null());
+}
+
+static void test_recorder_floppy_transfer_and_halt()
+{
+	using Req = dev::Hardware::Req;
+	auto hw = std::make_unique<dev::Hardware>("", "", true);
+	auto debug = std::make_unique<dev::Debugger>(*hw);
+	hw->Request(Req::DEBUG_ATTACH, {{"data", true}});
+	hw->Request(Req::MOUNT_FDD, {{"driveIdx", 0}, {"data", std::vector<uint8_t>{0x19}}, {"path", "probe.fdd"}});
+	// Select drive 0/side 0, set sector 1, issue WRITE SECTOR, then send one byte.
+	hw->Request(Req::LOAD_ROM, {{"data", std::vector<uint8_t>{0x3E, 4, 0xD3, 0x1C,
+		0x3E, 1, 0xD3, 0x19, 0x3E, 0xA0, 0xD3, 0x1B, 0x3E, 0x5A, 0xD3, 0x18, 0x76}}});
+	const auto status = [&] { return *hw->Request(Req::DEBUG_RECORDER_STATUS); };
+	const auto move = [&](const char* action) {
+		return (*hw->Request(Req::DEBUG_RECORDER_MOVE, {{"action", action}, {"expectedRevision", status()["revision"]}}))["moved"].get<bool>();
+	};
+	const auto byte = [&] { return (*hw->Request(Req::GET_FDD_IMAGE, {{"driveIdx", 0}}))["data"][0].get<int>(); };
+	for (int i = 0; i < 7; ++i) hw->Request(Req::EXECUTE_INSTR);
+	const auto before = *hw->Request(Req::GET_FDC_INFO);
+	ASSERT_EQ(byte(), 0x19);
+	hw->Request(Req::EXECUTE_INSTR);
+	const auto after = *hw->Request(Req::GET_FDC_INFO);
+	ASSERT_EQ(byte(), 0x5A);
+	ASSERT_TRUE(move("backInstruction"));
+	ASSERT_EQ(byte(), 0x19);
+	ASSERT_TRUE(*hw->Request(Req::GET_FDC_INFO) == before);
+	ASSERT_TRUE(move("forwardInstruction"));
+	ASSERT_EQ(byte(), 0x5A);
+	ASSERT_TRUE(*hw->Request(Req::GET_FDC_INFO) == after);
+	hw->Request(Req::EXECUTE_FRAME_NO_BREAKS);
+	ASSERT_EQ(status()["instructionStepsBack"].get<int>(), 9);
+	ASSERT_TRUE(move("backInstruction"));
+	ASSERT_EQ(status()["position"]["pc"].get<int>(), 16);
+	ASSERT_TRUE(move("forwardInstruction"));
+	ASSERT_EQ(status()["instructionStepsForward"].get<int>(), 0);
+	ASSERT_TRUE(move("forwardFrame"));
+}
+
 static void test_active_calls_outlive_trace_and_track_recursion()
 {
 	using Req = dev::Hardware::Req;
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debug = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debug = std::make_unique<dev::Debugger>(*hw);
 	hw->Request(Req::DEBUG_ATTACH, {{"data", true}});
 	// 0005 CALL 0009; 000C CZ 0009 recurses once. At the second level
 	// CZ is not taken. The loop at 0014 stays in the callee until patched.
@@ -1963,7 +2064,7 @@ static void test_trace_log_queries()
 {
 	{
 		auto hardware = std::make_unique<dev::Hardware>("", "", true);
-		auto debug = std::make_unique<dev::Debugger>(*hardware, 1);
+		auto debug = std::make_unique<dev::Debugger>(*hardware);
 		hardware->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}});
 		hardware->Request(dev::Hardware::Req::SET_MEM, {{"addr", 0},
 			{"data", std::vector<uint8_t>{0xCD, 0x06, 0x00, 0x76, 0, 0, 0x00, 0xC9}}});
@@ -2003,7 +2104,7 @@ static void test_trace_log_queries()
 		ASSERT_TRUE(std::holds_alternative<dev::server::RequestError>(invalid));
 	}
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::DEBUG_ATTACH, {{"data", true}}));
 	ASSERT_TRUE(hw->Request(dev::Hardware::Req::SET_MEM,
 		{{"addr", 0}, {"data", std::vector<uint8_t>{0x3E, 0x42, 0x00, 0x76}}}));
@@ -2087,7 +2188,7 @@ static void test_script_protocol()
 	const auto missingPath = (tempDir / "missing.lua").generic_string();
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	auto request = [&hw](dev::Hardware::Req command, const nlohmann::json& data = nlohmann::json::object()) {
 		return *hw->Request(command, data);
 	};
@@ -2289,7 +2390,7 @@ static void test_script_protocol()
 	debugger.reset();
 	hw.reset();
 	hw = std::make_unique<dev::Hardware>("", "", true);
-	debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	debugger = std::make_unique<dev::Debugger>(*hw);
 	ASSERT_TRUE(request(dev::Hardware::Req::DEBUG_SCRIPT_GET_ALL)["scripts"].empty());
 	ASSERT_EQ(request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
 		{{"name", "new-lifetime"}, {"path", validPath}, {"active", false}})
@@ -2312,7 +2413,7 @@ static void test_script_overlay_protocol()
 	};
 
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	auto request = [&hw](dev::Hardware::Req command,
 		const nlohmann::json& data = nlohmann::json::object()) {
 		return *hw->Request(command, data);
@@ -2453,7 +2554,7 @@ static void test_script_overlay_capacity()
 		return path.generic_string();
 	};
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	auto request = [&hw](dev::Hardware::Req command,
 		const nlohmann::json& data = nlohmann::json::object()) {
 		return *hw->Request(command, data);
@@ -2497,7 +2598,7 @@ static void test_script_capacity()
 		file << "return true\n";
 	}
 	auto hw = std::make_unique<dev::Hardware>("", "", true);
-	auto debugger = std::make_unique<dev::Debugger>(*hw, 1);
+	auto debugger = std::make_unique<dev::Debugger>(*hw);
 	for (size_t index = 0; index < dev::Scripts::MAX_RECORDS; index++) {
 		const auto added = *hw->Request(dev::Hardware::Req::DEBUG_SCRIPT_ADD,
 			{{"name", "capacity"}, {"path", path.generic_string()}, {"active", false}});
@@ -2564,6 +2665,8 @@ int main()
 	test_hardware_statistics_and_mutations();
 	test_io_port_data_is_256_byte_binary();
 	test_trace_log_queries();
+	test_recorder_instruction_round_trip();
+	test_recorder_floppy_transfer_and_halt();
 	test_active_calls_outlive_trace_and_track_recursion();
 	test_script_protocol();
 	test_script_overlay_protocol();

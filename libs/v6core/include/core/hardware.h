@@ -18,6 +18,7 @@
 #include "core/sound_ay8910.h"
 #include "core/audio.h"
 #include "core/fdc_wd1793.h"
+#include "core/recorder.h"
 #include "utils/utils.h"
 #include "utils/result.h"
 #include "utils/tqueue.h"
@@ -25,6 +26,11 @@
 
 namespace dev
 {
+	class RecorderStateError : public std::runtime_error
+	{
+	public:
+		using std::runtime_error::runtime_error;
+	};
 	class Hardware
 	{
 		CpuI8080 m_cpu;
@@ -37,6 +43,26 @@ namespace dev
 		AYWrapper m_aywrapper;
 		Audio m_audio;
 		Fdc1793 m_fdc;
+		struct RecorderState {
+			CpuI8080::State cpu;
+			Memory::RecorderState memory;
+			IO::State io;
+			IO::PortsData portsIn, portsOut;
+			Display::Update display;
+			Keyboard::State keyboard;
+			TimerI8253 timer;
+			SoundAY8910 ay;
+			AYWrapper::State ayWrapper;
+			Audio::State audio;
+			Fdc1793::State fdc;
+		};
+		RecorderTimeline<RecorderState> m_timeline;
+		Keyboard::State m_hostKeyboard{};
+		bool m_reconcileKeyboard = false;
+		RecorderState CaptureRecorderState();
+		void ResetRecorder();
+		bool MoveRecorder(std::string_view action, uint64_t targetId = 0);
+		nlohmann::json RecorderStatus();
 
 		enum class Status : int {
 			RUN,

@@ -177,6 +177,9 @@ public:
     {
         Init();
     }
+    struct State { float last; int accumulator; };
+    State GetState() const { return {last, ayAccu}; }
+    void Restore(const State& state) { last = state.last; ayAccu = state.accumulator; }
 
     void Reset()
     {

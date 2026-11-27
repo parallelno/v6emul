@@ -141,7 +141,7 @@ Debug is fully **opt-in** — activated via `DEBUG_ATTACH`. Features:
 - **Watchpoints** — memory read/write monitoring
 - **Disassembler** — Intel 8080 and Z80 mnemonic modes
 - **Trace log** — instruction-level execution recording
-- **Recorder** — full state snapshot/rewind (time travel debugging)
+- **Recorder** — frame checkpoints and a short, bidirectional instruction history. Hardware owns the timeline on the emulation thread and journals RAM and floppy-byte changes between compact device snapshots. Frame playback and instruction navigation restore state without invoking emulated code. Replaying historical state does not undo host files, emitted audio, or Lua globals.
 - **Code performance** — cycle counting for address ranges
 - **Memory edits** — runtime byte patches
 - **Lua scripts** — programmable debug automation

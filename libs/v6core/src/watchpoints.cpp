@@ -109,6 +109,12 @@ auto dev::Watchpoints::GetUpdates()
 bool dev::Watchpoints::CheckBreak()
 {
 	if (!m_wpBreak) return false;
+	ResetMatches();
+	return true;
+}
+
+void dev::Watchpoints::ResetMatches()
+{
 
 	m_wpBreak = false;
 	m_hit.reset();
@@ -119,5 +125,4 @@ bool dev::Watchpoints::CheckBreak()
 		watchpoint.Reset();
 	}
 
-	return true;
 }

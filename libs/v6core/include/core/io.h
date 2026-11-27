@@ -95,6 +95,9 @@ namespace dev
 		struct PortsData {
 			std::array<uint8_t, 256> data{};
 		};
+		void RestorePortSamples(const PortsData& inputs, const PortsData& outputs) {
+			m_portsInData = inputs; m_portsOutData = outputs;
+		}
 
 	private:
 		State m_state;

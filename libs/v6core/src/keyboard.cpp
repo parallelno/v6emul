@@ -1,4 +1,18 @@
 ﻿#include "core/keyboard.h"
+#include <algorithm>
+
+auto dev::Keyboard::GetState() const -> State
+{
+	State state{{}, m_keySS, m_keyUS, m_keyRus, m_rebootType};
+	std::copy_n(m_encodingMatrix, 8, state.matrix);
+	return state;
+}
+
+void dev::Keyboard::Restore(const State& state)
+{
+	std::copy_n(state.matrix, 8, m_encodingMatrix);
+	m_keySS = state.ss; m_keyUS = state.us; m_keyRus = state.rus; m_rebootType = state.reboot;
+}
 
 #include <cstring>
 

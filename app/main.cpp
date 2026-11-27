@@ -161,7 +161,7 @@ int main(int argc, char* argv[])
 
 	// Create hardware (heap-allocated due to ~2MB Memory inside)
 	auto hw = std::make_unique<dev::Hardware>(bootRomPath, "", true);
-	auto debugger = testMode ? nullptr : std::make_unique<dev::Debugger>(*hw, dev::Recorder::RECORD_FRAMES_MAX);
+	auto debugger = testMode ? nullptr : std::make_unique<dev::Debugger>(*hw);
 
 	// Apply frame mode
 	hw->Request(dev::Hardware::Req::SET_FRAME_MODE,

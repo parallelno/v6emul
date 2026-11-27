@@ -9,7 +9,7 @@
 #include "utils/str_utils.h"
 #include "utils/utils.h"
 
-dev::Debugger::Debugger(Hardware& _hardware, const int _recordFrames)
+dev::Debugger::Debugger(Hardware& _hardware)
 	:
 	m_hardware(_hardware),
 	m_lastReadsAddrs(), m_lastWritesAddrs(),
@@ -18,8 +18,7 @@ dev::Debugger::Debugger(Hardware& _hardware, const int _recordFrames)
 	m_debugData(_hardware),
 	m_disasm(_hardware, m_debugData),
 	m_traceLog(m_debugData),
-	m_lastRWAddrsOut(),
-	m_recorder(_recordFrames)
+	m_lastRWAddrsOut()
 {
 
 	Hardware::DebugFunc debugFunc = std::bind
@@ -52,9 +51,7 @@ dev::Debugger::~Debugger()
 // Has to be called after Hardware Reset, loading the rom file, fdd immage,
 // attach/dettach debugger, and other operations that change the Hardware
 // states because this func stores the last state of Hardware
-void dev::Debugger::Reset(bool _resetRecorder,
-	CpuI8080::State* _cpuStateP, Memory::State* _memStateP,
-	IO::State* _ioStateP, Display::State* _displayStateP)
+void dev::Debugger::Reset()
 {
 	m_disasm.Reset();
 	m_debugData.Reset();
@@ -66,8 +63,6 @@ void dev::Debugger::Reset(bool _resetRecorder,
 	m_memLastRW.fill(0);
 
 	m_traceLog.Reset();
-	if (_resetRecorder) m_recorder.Reset(
-		_cpuStateP, _memStateP, _ioStateP, _displayStateP);
 }
 
 //////////////////////////////////////////////////////////////
@@ -181,9 +176,6 @@ bool dev::Debugger::Debug(CpuI8080::State* _cpuStateP, Memory::State* _memStateP
 	// tracelog
 	m_traceLog.Update(*_cpuStateP, *_memStateP, *_displayStateP);
 
-	// recorder
-	m_recorder.Update(_cpuStateP, _memStateP, _ioStateP, _displayStateP);
-
 	return break_;
 }
 
@@ -198,52 +190,18 @@ auto dev::Debugger::DebugReqHandling(Hardware::Req _req, nlohmann::json _reqData
 	switch (_req)
 	{
 	case Hardware::Req::DEBUG_RESET:
-		Reset(_reqDataJ["resetRecorder"], _cpuStateP, _memStateP, _ioStateP, _displayStateP);
+		Reset();
 		break;
-	//////////////////
-	//
-	// Recorder
-	//
-	/////////////////
-
-	case Hardware::Req::DEBUG_RECORDER_RESET:
-		m_recorder.Reset(_cpuStateP, _memStateP, _ioStateP, _displayStateP);
-		break;
-
-	case Hardware::Req::DEBUG_RECORDER_PLAY_FORWARD:
+	case Hardware::Req::INTERNAL_RECORDER_POSITION_CHANGED: {
 		m_traceLog.Reset();
-		m_recorder.PlayForward(_reqDataJ["frames"], _cpuStateP, _memStateP,
-								_ioStateP, _displayStateP);
-		break;
-
-	case Hardware::Req::DEBUG_RECORDER_PLAY_REVERSE:
-		m_traceLog.Reset();
-		m_recorder.PlayReverse(_reqDataJ["frames"], _cpuStateP, _memStateP,
-								_ioStateP, _displayStateP);
-		break;
-
-	case Hardware::Req::DEBUG_RECORDER_GET_STATE_RECORDED:
-		out = nlohmann::json{ {"states", m_recorder.GetStateRecorded() } };
-		break;
-
-	case Hardware::Req::DEBUG_RECORDER_GET_STATE_CURRENT:
-		out = nlohmann::json{ {"states", m_recorder.GetStateCurrent() } };
-		break;
-
-	case Hardware::Req::DEBUG_RECORDER_SERIALIZE: {
-
-		out = nlohmann::json{ {"data", nlohmann::json::binary(m_recorder.Serialize()) } };
-		break;
-	}
-	case Hardware::Req::DEBUG_RECORDER_DESERIALIZE: {
-
-		nlohmann::json::binary_t binaryData =
-			_reqDataJ["data"].get<nlohmann::json::binary_t>();
-
-		std::vector<uint8_t> data(binaryData.begin(), binaryData.end());
-
-		m_recorder.Deserialize(data, _cpuStateP, _memStateP, _ioStateP, _displayStateP);
-		m_traceLog.Reset();
+		m_debugData.CancelCodePerfSamples();
+		m_debugData.GetWatchpoints().ResetMatches();
+		m_disasm.Reset();
+		std::lock_guard lock(m_lastRWMutex);
+		m_lastReadsAddrs.fill(LAST_RW_NO_DATA);
+		m_lastWritesAddrs.fill(LAST_RW_NO_DATA);
+		m_lastReadsIdx = m_lastWritesIdx = 0;
+		m_memLastRW.fill(0);
 		break;
 	}
 

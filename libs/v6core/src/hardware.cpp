@@ -34,6 +34,7 @@ dev::Hardware::Hardware(const std::string& _pathBootData,
 	m_display(m_memory, m_io)
 {
 	Init();
+	m_hostKeyboard = m_keyboard.GetState();
 	m_sessionId = ++nextSessionId;
 	m_sessionStartCycles = GetTotalCycles();
 	m_sessionStartFrames = GetTotalFrames();
@@ -93,9 +94,68 @@ void dev::Hardware::SetDebugPortOutCallback(IO::DebugPortOutFunc _func)
 	m_io.SetDebugPortOutCallback(std::move(_func));
 }
 
+auto dev::Hardware::CaptureRecorderState() -> RecorderState
+{
+	return {m_cpu.GetState(), m_memory.CaptureRecorderState(), m_io.GetState(),
+		*m_io.GetPortsInData(), *m_io.GetPortsOutData(), m_display.GetState().update,
+		m_keyboard.GetState(), m_timer, m_ay, m_aywrapper.GetState(), m_audio.GetState(), m_fdc.GetState()};
+}
+
+void dev::Hardware::ResetRecorder()
+{
+	m_timeline.Reset(CaptureRecorderState());
+}
+
+auto dev::Hardware::RecorderStatus() -> nlohmann::json
+{
+	return m_timeline.Status(m_debugAttached, IsRunning(), m_cpu.GetPC(), m_display.GetFrameNum());
+}
+
+bool dev::Hardware::MoveRecorder(std::string_view action, uint64_t targetId)
+{
+	if (IsRunning()) throw RecorderStateError("running");
+	if (!m_debugAttached) throw RecorderStateError("not_attached");
+	const auto cycles = GetTotalCycles(), frames = GetTotalFrames();
+	if (!m_timeline.Move(action, [&](uint32_t address, uint8_t value) {
+		if (address < Memory::MEMORY_GLOBAL_LEN) (*m_memory.GetStateP()->ramP)[address] = value;
+		else m_fdc.RestoreByte(address - Memory::MEMORY_GLOBAL_LEN, value);
+	}, targetId)) return false;
+	const auto& state = m_timeline.Current();
+	*m_cpu.GetStateP() = state.cpu;
+	m_memory.RestoreRecorderState(state.memory);
+	*m_io.GetStateP() = state.io;
+	m_io.RestorePortSamples(state.portsIn, state.portsOut);
+	m_display.GetStateP()->update = state.display;
+	m_keyboard.Restore(state.keyboard);
+	m_reconcileKeyboard = true;
+	m_timer = state.timer; m_ay = state.ay; m_aywrapper.Restore(state.ayWrapper); m_audio.Restore(state.audio);
+	m_fdc.Restore(state.fdc);
+	m_cycleOffset = cycles - m_cpu.GetCC();
+	m_frameOffset = frames - m_display.GetFrameNum();
+	m_display.GetState().BuffUpdate(Display::BufferType::FRAME_BUFFER);
+	m_display.GetStateP()->update = state.display;
+	m_display.GetState().BuffUpdate(Display::BufferType::BACK_BUFFER);
+	if (DebugReqHandling) DebugReqHandling(Req::INTERNAL_RECORDER_POSITION_CHANGED, {},
+		m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+	const bool instruction = action == "seek" ? m_timeline.IsInstructionPosition(targetId)
+		: action != "backFrame" && action != "forwardFrame";
+	RecordStop(instruction ? "step" : "frameStep", {{"description", "Recorder restored historical state"}});
+	return true;
+}
+
 // outputs true if the execution breaks
 bool dev::Hardware::ExecuteInstruction()
 {
+	if (m_debugAttached) {
+		m_timeline.Branch();
+		if (m_reconcileKeyboard) {
+			m_keyboard.Restore(m_hostKeyboard);
+			m_timeline.Commit(CaptureRecorderState(), false, false);
+			m_reconcileKeyboard = false;
+		}
+	}
+	const bool wasHalted = m_cpu.GetHLTA();
+	const auto frame = m_display.GetFrameNum();
 	// mem debug init
 	m_memory.DebugInit();
 	do
@@ -107,20 +167,29 @@ bool dev::Hardware::ExecuteInstruction()
 	} while (!m_cpu.IsInstructionExecuted());
 
 	// debug per instruction
-	if (m_debugAttached && Debug(m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP()) ) {
-		return true;
-	}
+	bool shouldBreak = m_debugAttached && Debug && Debug(m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 
 	if (m_memory.IsException())
 	{
 		m_memory.InitRamDiskMapping(); // reset RAM Disk mode collision
 		dev::Log("ERROR: more than one RAM Disk has mapping enabled");
-		RecordStop("exception", {
+		if (!shouldBreak) RecordStop("exception", {
 			{"exceptionCode", "ram_disk_mapping_collision"},
 			{"description", "More than one RAM Disk has mapping enabled"}
 		});
-		return true;
+		shouldBreak = true;
 	}
+	if (m_debugAttached) {
+		const auto& memory = m_memory.GetState().debug;
+		for (int i = 0; i < memory.writeLen; ++i) {
+			m_timeline.Write(memory.writeGlobalAddr[i], memory.beforeWrite[i], memory.write[i]);
+		}
+		// An already halted CPU can spin without retiring another instruction.
+		// Waking from HLT through interrupt acknowledge and the injected RST is one transition.
+		const bool retired = !wasHalted || !m_cpu.GetHLTA();
+		m_timeline.Commit(CaptureRecorderState(), retired, frame != m_display.GetFrameNum());
+	}
+	if (shouldBreak) return true;
 
 	ReqHandling(0ns);
 
@@ -137,8 +206,8 @@ void dev::Hardware::Execution()
 {
 	while (m_status != Status::EXIT)
 	{
-		auto startCC = m_cpu.GetCC();
-		auto startFrame = m_display.GetFrameNum();
+		auto startCC = GetTotalCycles();
+		auto startFrame = GetTotalFrames();
 		auto startTime = std::chrono::system_clock::now();
 		auto startFrameTime = std::chrono::system_clock::now();
 
@@ -185,9 +254,9 @@ void dev::Hardware::Execution()
 		}
 
 		// print out the break statistics
-		auto elapsedCC = m_cpu.GetCC() - startCC;
+		auto elapsedCC = GetTotalCycles() - startCC;
 		if (elapsedCC) {
-			auto elapsedFrames = m_display.GetFrameNum() - startFrame;
+			auto elapsedFrames = GetTotalFrames() - startFrame;
 			auto elapsedTime = (std::chrono::duration<int64_t, std::nano>)(std::chrono::system_clock::now() - startTime);
 			double timeDurationSec = elapsedTime.count() / 1000000000.0;
 			dev::Log("Break: elapsed cpu cycles: {}, elapsed frames: {}, elapsed seconds: {}", elapsedCC, elapsedFrames, timeDurationSec);
@@ -233,6 +302,7 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 	switch (req)
 	{
 	case Req::INTERNAL_BEGIN_SESSION:
+		m_timeline.Touch();
 		m_sessionId = ++nextSessionId;
 		m_sessionStartCycles = GetTotalCycles();
 		m_sessionStartFrames = GetTotalFrames();
@@ -294,6 +364,50 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 
 	case Req::GET_STOP_RECORD:
 		out = m_stopRecord;
+		break;
+	case Req::DEBUG_RECORDER_STATUS:
+		out = RecorderStatus();
+		break;
+	case Req::DEBUG_RECORDER_MOVE:
+	{
+		if (IsRunning()) throw RecorderStateError("running");
+		if (!m_debugAttached) throw RecorderStateError("not_attached");
+		const auto action = dataJ.at("action").get<std::string>();
+		if (action != "backFrame" && action != "forwardFrame" && action != "backInstruction" && action != "forwardInstruction"
+			&& action != "backInstruction100" && action != "forwardInstruction100" && action != "seek")
+			throw std::invalid_argument("unknown recorder action");
+		if (dataJ.at("expectedRevision").get<uint64_t>() != m_timeline.Revision()) throw RecorderStateError("stale_revision");
+		const bool moved = MoveRecorder(action, action == "seek" ? dataJ.at("targetId").get<uint64_t>() : 0);
+		out = {{"moved", moved}, {"status", RecorderStatus()}};
+		if (moved) out["stopSequence"] = m_stopSequence;
+		break;
+	}
+	case Req::DEBUG_RECORDER_GET_STATE_RECORDED:
+	case Req::DEBUG_RECORDER_GET_STATE_CURRENT:
+	{
+		const auto status = RecorderStatus();
+		const auto count = status["frameCheckpoints"].get<size_t>();
+		out = {{"states", req == Req::DEBUG_RECORDER_GET_STATE_RECORDED ? count
+			: count - status["frameStepsForward"].get<size_t>()}};
+		break;
+	}
+	case Req::DEBUG_RECORDER_PLAY_FORWARD:
+	case Req::DEBUG_RECORDER_PLAY_REVERSE:
+	{
+		const int count = dataJ.at("frames").get<int>();
+		if (count < 1 || count > 3000) throw std::invalid_argument("frames must be 1..3000");
+		for (int i = 0; i < count; ++i) {
+			if (!MoveRecorder(req == Req::DEBUG_RECORDER_PLAY_FORWARD ? "forwardFrame" : "backFrame")) break;
+		}
+		break;
+	}
+	case Req::DEBUG_RECORDER_SERIALIZE:
+	case Req::DEBUG_RECORDER_DESERIALIZE:
+		throw RecorderStateError("legacy_blob_unsupported");
+	case Req::DEBUG_RECORDER_RESET:
+		if (IsRunning()) throw RecorderStateError("running");
+		if (!m_debugAttached) throw RecorderStateError("not_attached");
+		ResetRecorder();
 		break;
 
 	case Req::GET_REGS:
@@ -508,8 +622,15 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		break;
 
 	case Req::SET_BYTE_GLOBAL:
-		m_memory.SetByteGlobal(dataJ["addr"], dataJ["data"]);
+	{
+		const auto address = dataJ["addr"].get<GlobalAddr>();
+		const auto value = dataJ["data"].get<uint8_t>();
+		if (m_memory.GetByteGlobal(address) != value) {
+			m_memory.SetByteGlobal(address, value);
+			if (m_debugAttached) ResetRecorder();
+		}
 		break;
+	}
 
 	case Req::SET_CPU_SPEED:
 	{
@@ -593,10 +714,16 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		out = {{"index", dataJ["index"]}, {"hwColor", dataJ["hwColor"]}};
 		break;
 	case Req::DISMOUNT_FDD:
+	{
 		if (m_status == Status::RUN) throw std::runtime_error("FDD mutation requires stopped hardware");
-		m_fdc.Dismount(dataJ["driveIdx"]);
+		const int drive = dataJ["driveIdx"];
+		if (m_fdc.GetFddInfo(drive).mounted) {
+			m_fdc.Dismount(drive);
+			if (m_debugAttached) ResetRecorder();
+		}
 		out = {{"driveIdx", dataJ["driveIdx"]}, {"mounted", false}};
 		break;
+	}
 	case Req::IS_MEMROM_ENABLED:
 		out = {
 			{"data", m_memory.IsRomEnabled() },
@@ -605,8 +732,13 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 
 	case Req::KEY_HANDLING:
 	{
+		const bool preserve = m_debugAttached && m_timeline.Browsing();
+		const auto recordedKeyboard = m_keyboard.GetState();
+		if (preserve) m_keyboard.Restore(m_hostKeyboard);
 		auto op = m_io.GetKeyboard().KeyHandling(
 			dataJ["scancode"], dataJ["action"]);
+		m_hostKeyboard = m_keyboard.GetState();
+		if (preserve) m_keyboard.Restore(recordedKeyboard);
 
 		if (op == Keyboard::Operation::RESET) {
 			Reset();
@@ -614,6 +746,7 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		else if (op == Keyboard::Operation::RESTART) {
 			Restart();
 		}
+		else if (m_debugAttached && !preserve) m_timeline.Commit(CaptureRecorderState(), false, false);
 		break;
 	}
 	case Req::GET_SCROLL_VERT:
@@ -639,7 +772,13 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 			DebugReqHandling(Req::INTERNAL_RESET_TRACE_HISTORY, {},
 				m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 		}
-		m_debugAttached = dataJ["data"];
+		if (m_debugAttached != dataJ["data"].get<bool>()) {
+			m_debugAttached = dataJ["data"];
+			ResetRecorder();
+			m_fdc.SetJournal(m_debugAttached ? Fdc1793::Journal([this](uint32_t address, uint8_t before, uint8_t after) {
+				m_timeline.Write(Memory::MEMORY_GLOBAL_LEN + address, before, after);
+			}) : Fdc1793::Journal{});
+		}
 		break;
 
 	case Req::LOAD_ROM:
@@ -654,6 +793,7 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 			DebugReqHandling(Req::INTERNAL_REAPPLY_MEMORY_EDITS, {},
 				m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
 		}
+		if (m_debugAttached) ResetRecorder();
 		if (autorun) Run();
 		break;
 	}
@@ -666,6 +806,7 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		bool autoBoot = dataJ.value("autoBoot", false);
 		data.resize(FDD_SIZE, 0);
 		m_fdc.Mount(driveIdx, data, path);
+		if (m_debugAttached) ResetRecorder();
 		if (autoBoot) {
 			Reset();
 			Run();
@@ -679,6 +820,20 @@ bool dev::Hardware::ReqHandling(const std::chrono::duration<int64_t, std::nano> 
 		} else {
 			m_reqRes.emplace({{}, nullptr, false});
 			return true;
+		}
+	}
+	if (m_debugAttached) {
+		switch (req) {
+		case Req::SET_MEM: case Req::SET_IO_PALETTE_COMMIT_TIME:
+		case Req::SET_DISPLAY_BORDER_LEFT: case Req::SET_DISPLAY_IRQ_COMMIT_PXL: case Req::SET_IO_PALETTE_ENTRY:
+		case Req::LOAD_FDD: case Req::RESET_UPDATE_FDD:
+		case Req::DEBUG_MEMORY_EDIT_ADD: case Req::DEBUG_MEMORY_EDIT_RESTORE:
+		case Req::RUN_HEADLESS:
+			ResetRecorder(); break;
+		case Req::DEBUG_RESET:
+			if (dataJ.value("resetRecorder", false)) ResetRecorder();
+			break;
+		default: break;
 		}
 	}
 
@@ -700,6 +855,7 @@ void dev::Hardware::Reset()
 	m_cpu.Reset();
 	m_display.Reset();
 	m_audio.Reset();
+	if (m_debugAttached) ResetRecorder();
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
@@ -716,6 +872,7 @@ void dev::Hardware::Restart()
 	m_display.Reset();
 	m_audio.Reset();
 	m_memory.Restart();
+	if (m_debugAttached) ResetRecorder();
 	if (DebugReqHandling) {
 		DebugReqHandling(Req::INTERNAL_CANCEL_CODE_PERF_SAMPLES, {},
 			m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
@@ -726,6 +883,7 @@ void dev::Hardware::Restart()
 
 void dev::Hardware::Stop(bool _record)
 {
+	m_timeline.Touch();
 	if (m_status == Status::RUN) m_lastRunCycles = GetTotalCycles() - m_runStartCycles;
 	m_status = Status::STOP;
 	m_audio.Pause(true);
@@ -750,6 +908,7 @@ void dev::Hardware::RecordStop(const std::string& _reason, const nlohmann::json&
 // to continue execution
 void dev::Hardware::Run()
 {
+	m_timeline.Touch();
 	if (m_status != Status::RUN) m_runStartCycles = GetTotalCycles();
 	m_status = Status::RUN;
 	m_audio.Pause(false);

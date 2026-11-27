@@ -59,6 +59,9 @@ namespace dev
 		Operation m_rebootType = Operation::NONE;
 
 		Keyboard();
+		struct State { uint8_t matrix[8]; bool ss, us, rus; Operation reboot; };
+		State GetState() const;
+		void Restore(const State& state);
 
 		auto KeyHandling(int _keyCode, int _action) -> Operation;
 		auto Read(int _rows) -> uint8_t;

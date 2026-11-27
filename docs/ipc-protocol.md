@@ -686,6 +686,46 @@ function but does not undo arbitrary shared Lua globals.
 | 58 | `DEBUG_RECORDER_SERIALIZE` |
 | 59 | `DEBUG_RECORDER_DESERIALIZE` |
 
+Recorder schema 1 is advertised by `GET_SERVER_INFO` with `recorderSchema: 1`
+and `recorderLimits: {maxFrameCheckpoints: 3000, maxInstructionSteps: 1000}`.
+
+| cmd | Name | Data | Response |
+|-----|------|------|----------|
+| 114 | `DEBUG_RECORDER_STATUS` | — | Recorder status |
+| 115 | `DEBUG_RECORDER_MOVE` | `{action, expectedRevision}` | `{moved, status, stopSequence?}` |
+
+Actions are `backFrame`, `backInstruction`, `forwardInstruction`, and
+`forwardFrame`. With `recorderInstructionJumps100: true`, the server also accepts
+`backInstruction100` and `forwardInstruction100`. Each jump moves up to the named
+number of instructions, clamps to available history, and produces one stop record
+if it moves. Status is readable while running; movement requires paused,
+attached hardware. The revision comes from the current status. State errors
+return `dispatch_error` with `details.reason` (`running`, `not_attached`, or
+`stale_revision`). No target is a successful no-op with `moved: false`. Moves
+restore recorded state without executing code, and successful moves publish a
+`step` or `frameStep` stop record with the returned `stopSequence`.
+
+Status contains `attached`, `running`, `revision`, `frameCheckpoints`,
+`frameStepsBack`, `frameStepsForward`, `instructionStepsBack`,
+`instructionStepsForward`, `position`, and `timeline`. The last two fields are
+null when detached. Position is `{id, pc, frameNumber, atFrameCheckpoint,
+atRecordedTip}`. Timeline is `{oldest, newest, instructionStart, frameTicks,
+instructionTicks}`. IDs order recorded positions; they are not cycle counts.
+`instructionStart` is null without instruction history. Tick lists show every
+stop for up to 40 stops of that kind and every tenth stop plus both endpoints
+for denser histories. Counts, not ticks, determine which actions can move.
+Resuming execution from a historical position drops its recorded future.
+
+With `recorderSeek: true`, paused timeline status also includes `snapshots`,
+an oldest-to-newest list of `[id, depth, unit]` entries. Depth counts recorded
+instructions or frame positions from the newest position. Units are `instruction`,
+`frame`, and `tip` (depth zero). Use `DEBUG_RECORDER_MOVE` with
+`{action: "seek", targetId, expectedRevision}` to restore one listed position.
+
+Commands 53–57 remain available for frame-only clients. The old binary format
+cannot faithfully represent the added peripheral state; commands 58–59 now
+return `dispatch_error` with reason `legacy_blob_unsupported`.
+
 ### Debug: Trace Log
 
 | cmd | Name |

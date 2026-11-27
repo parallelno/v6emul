@@ -8,6 +8,7 @@
 
 #include <string>
 #include <vector>
+#include <functional>
 
 #include "core/fdd_consts.h"
 
@@ -68,6 +69,17 @@ namespace dev
 		};
 
 		static constexpr int DRIVES_MAX = 4;
+		struct State {
+			uint8_t regs[5], drive, side, track, lastS, irq, wait, command;
+			int length, disk, pointerDisk, pointerOffset;
+			bool headerPointer;
+			struct Disk { uint8_t header[6]; bool updated; size_t reads, writes; } disks[DRIVES_MAX];
+		};
+		State GetState() const;
+		void Restore(const State& state);
+		using Journal = std::function<void(uint32_t, uint8_t, uint8_t)>;
+		void SetJournal(Journal journal) { m_journal = std::move(journal); }
+		void RestoreByte(uint32_t address, uint8_t byte) { m_disks[address / FDD_SIZE].data[address % FDD_SIZE] = byte; }
 
 	private:
 		FDisk m_disks[DRIVES_MAX];
@@ -85,6 +97,8 @@ namespace dev
 
 		uint8_t* m_ptr = nullptr; // Pointer to data
 		FDisk* m_disk = nullptr; // current disk images
+		Journal m_journal;
+		void WriteBytes(uint8_t* start, size_t length, uint8_t value);
 
 		auto Seek(int _sideID, int _trackID, int _sectorID) -> uint8_t*;
 		void Reset();

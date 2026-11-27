@@ -158,6 +158,21 @@ auto dev::Memory::GetScreenBytes(Addr _screenAddrOffset) const
 
 auto dev::Memory::GetRam() const -> const Ram* { return &m_ram; }
 
+auto dev::Memory::CaptureRecorderState() const -> RecorderState
+{
+	RecorderState state{m_state.update, {}, m_mappingsEnabled};
+	std::copy_n(m_mappings, RAM_DISK_MAX, state.mappings);
+	return state;
+}
+
+void dev::Memory::RestoreRecorderState(const RecorderState& state)
+{
+	m_state.update = state.update;
+	m_mappingsEnabled = state.enabled;
+	std::copy_n(state.mappings, RAM_DISK_MAX, m_mappings);
+	DebugInit();
+}
+
 // converts the addr to a global addr depending on the ram/stack mapping modes
 auto dev::Memory::GetGlobalAddr(const Addr _addr, const AddrSpace _addrSpace) const
 -> GlobalAddr

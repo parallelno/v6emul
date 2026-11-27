@@ -168,6 +168,11 @@ int RunServerMode(dev::Hardware& _hw, uint16_t _port, dev::Display::ColorFormat 
 		decltype(_hw.Request(req, dataJ)) result;
 		try {
 			result = _hw.Request(req, dataJ);
+		} catch (const dev::RecorderStateError& error) {
+			auto response = dev::ipc::MakeErrorResponse(std::string("Recorder operation unavailable: ") + error.what(), "dispatch_error");
+			response["details"] = {{"command", cmdInt}, {"reason", error.what()}};
+			server.Send(dev::ipc::Encode(response));
+			continue;
 		} catch (const dev::MemoryEditNotFound& error) {
 			auto errorResponse = dev::ipc::MakeErrorResponse(error.what(), "invalid_request");
 			errorResponse["details"] = {

@@ -42,7 +42,7 @@ namespace
 		}
 
 		return command >= static_cast<int>(dev::Hardware::Req::RUN) &&
-				command <= static_cast<int>(dev::Hardware::Req::DEBUG_ACTIVE_CALLS);
+				command <= static_cast<int>(dev::Hardware::Req::DEBUG_RECORDER_MOVE);
 	}
 
 	auto IsAddress(const nlohmann::json& value) -> bool
@@ -503,6 +503,26 @@ auto dev::server::ValidateRequest(const nlohmann::json& request) -> RequestValid
 	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_ACTIVE_CALLS) && !data.empty()) {
 		return RequestError{"invalid_request", "active calls do not take arguments"};
 	}
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_RECORDER_STATUS) && !data.empty())
+		return RequestError{"invalid_request", "recorder status does not take arguments"};
+	if (command == static_cast<int>(dev::Hardware::Req::DEBUG_RECORDER_MOVE)) {
+		for (const auto& [field, value] : data.items()) {
+			if (field != "action" && field != "expectedRevision" && field != "targetId")
+				return RequestError{"invalid_request", "unknown recorder field", {{"command", command}, {"field", field}}};
+		}
+		const auto action = data.find("action");
+		if (action == data.end() || !action->is_string() ||
+			(*action != "backFrame" && *action != "backInstruction" && *action != "forwardInstruction" && *action != "forwardFrame"
+			&& *action != "backInstruction100" && *action != "forwardInstruction100" && *action != "seek"))
+			return RequestError{"invalid_request", "invalid recorder action", {{"command", command}, {"field", "action"}}};
+		uint64_t revision, target;
+		if ((*action == "seek" && (!data.contains("targetId") || !ReadUnsigned(data["targetId"], target) || target > 9007199254740991ULL))
+			|| (*action != "seek" && data.contains("targetId")))
+			return RequestError{"invalid_request", "seek requires a snapshot id", {{"command", command}, {"field", "targetId"}}};
+		if (!data.contains("expectedRevision") || !ReadUnsigned(data["expectedRevision"], revision) || revision > 9007199254740991ULL)
+			return RequestError{"invalid_request", "expectedRevision must be a non-negative safe integer",
+				{{"command", command}, {"field", "expectedRevision"}}};
+	}
 
 	if (command == static_cast<int>(dev::Hardware::Req::GET_STACK_SAMPLE)) {
 		auto addressIt = data.find("addr");
@@ -650,7 +670,7 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 		dev::ipc::CMD_PING
 	};
 	for (int command = static_cast<int>(dev::Hardware::Req::RUN);
-		command <= static_cast<int>(dev::Hardware::Req::DEBUG_ACTIVE_CALLS); ++command) {
+		command <= static_cast<int>(dev::Hardware::Req::DEBUG_RECORDER_MOVE); ++command) {
 		commands.push_back(command);
 	}
 
@@ -703,6 +723,11 @@ auto dev::server::MakeServerInfo(const std::string& emulatorVersion) -> nlohmann
 			{"traceLogSchema", 1},
 			{"functionHistorySchema", 1},
 			{"activeCallStackSchema", 1},
+			{"recorderSchema", 1},
+			{"recorderInstructionJumps100", true},
+			{"recorderSeek", true},
+			{"recorderLimits", {{"maxFrameCheckpoints", dev::RecorderTimeline<int>::MAX_FRAMES},
+				{"maxInstructionSteps", dev::RecorderTimeline<int>::MAX_INSTRUCTIONS}}},
 			{"traceLogFilter", true},
 			{"traceLogWindowQuery", true},
 			{"traceLogLimits", {{"capacity", dev::TraceLog::TRACE_LOG_SIZE}, {"maxLines", 512}, {"maxPatternBytes", 64}}},

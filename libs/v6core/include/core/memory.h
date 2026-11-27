@@ -184,6 +184,9 @@ namespace dev
 		auto GetState() const -> const State& { return m_state; };
 		auto GetStateP() -> State* { return &m_state; };
 		auto GetMappingsP() const -> const Mapping* { return m_mappings; };
+		struct RecorderState { Update update; Mapping mappings[RAM_DISK_MAX]; int enabled; };
+		RecorderState CaptureRecorderState() const;
+		void RestoreRecorderState(const RecorderState& state);
 		void SetRamDiskMode(uint8_t _diskIdx, uint8_t _data);
 		void InitRamDiskMapping();
 		void SetMemType(const MemType _memType);
